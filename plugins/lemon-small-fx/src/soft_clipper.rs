@@ -20,10 +20,12 @@ pub const SETTINGS: [Setting; dsp::PARAMS] = [
     Setting { id: "post", name: "Post gain", range: dsp::RANGES[dsp::POST], start: dsp::DEFAULTS[dsp::POST], magnet: Some(128) },
 ];
 
-/// Editor layout (spec §2), as the original's: the two knobs over the wordmark at the left, the curve at the right.
+/// Editor layout (spec §2), as the original's: the two knobs over the wordmark at the left, the curve at the right. The
+/// page's ranges end before their last number (6 px apart, 8 px from the edges); a card's `x1` and `y1` are its last
+/// pixels.
 const CARDS: [Card; 2] = [
-    Card { x0: 8.0, x1: 156.0, y0: 28.0, y1: 104.0, heading: "CLIPPER" },
-    Card { x0: 162.0, x1: 312.0, y0: 28.0, y1: 152.0, heading: "CURVE" },
+    Card { x0: 8.0, x1: 155.0, y0: 28.0, y1: 103.0, heading: "CLIPPER" },
+    Card { x0: 162.0, x1: 311.0, y0: 28.0, y1: 151.0, heading: "CURVE" },
 ];
 
 const CONTROLS: [Control; 2] = [
@@ -34,12 +36,14 @@ const CONTROLS: [Control; 2] = [
 pub const SPEC: &Spec = &Spec {
     name: "ML Soft Clipper",
     word: "SOFT CLIPPER",
-    about: "ML Studio's soft clipper",
+    about: "AQUILA's soft clipper",
     settings: &SETTINGS,
     version: None,
     any_version: false,
     fields: &[],
     tail: &[],
+    blank: None,
+    locate: None,
     size: (320, 160),
     cards: &CARDS,
     controls: &CONTROLS,
@@ -100,7 +104,7 @@ pub struct SoftClipperKind;
 impl Kind for SoftClipperKind {
     const SPEC: &'static Spec = SPEC;
     const CLAP_ID: &'static str = "org.openstudio.lemon-soft-clipper";
-    const CLAP_DESCRIPTION: &'static str = "ML Studio's soft clipper";
+    const CLAP_DESCRIPTION: &'static str = "AQUILA's soft clipper";
     const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::AudioEffect, ClapFeature::Distortion, ClapFeature::Stereo];
     const VST3_CLASS_ID: [u8; 16] = *b"LemonStudioClipr";
     const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] = &[Vst3SubCategory::Fx, Vst3SubCategory::Distortion];

@@ -11,6 +11,9 @@ const KICK: TablerIcon = TablerIcon { filled: false, d: "M 13.5 10.5 C 13.5 14.3
 
 /// Tabler's `arrow-back-up` mirrored left to right (an undone step, spec: ui/settings-choices.md "Undo history: the
 /// four checks (2026-10-16)").
+/// A padlock on Tabler's grid: a channel locked to a note source.
+const LOCK: TablerIcon = TablerIcon { filled: false, d: "M 6 11 L 18 11 C 18.552 11 19 11.448 19 12 L 19 20 C 19 20.552 18.552 21 18 21 L 6 21 C 5.448 21 5 20.552 5 20 L 5 12 C 5 11.448 5.448 11 6 11 Z M 8 11 L 8 7 C 8 4.791 9.791 3 12 3 C 14.209 3 16 4.791 16 7 L 16 11" };
+
 const REDO: TablerIcon = TablerIcon { filled: false, d: "M 15 14 L 19 10 L 15 6 M 19 10 L 8 10 C 5.791 10 4 11.791 4 14 C 4 16.209 5.791 18 8 18 L 9 18" };
 
 // Three channel labels and a staggered pattern of active steps on a 24-unit grid.
@@ -44,6 +47,7 @@ pub(crate) fn default_shape(icon: Icon) -> &'static TablerIcon {
         Icon::Minimize => &tb::MINUS,
         Icon::Restore => &tb::SQUARES,
         Icon::Close => &tb::X,
+        Icon::Lock => &LOCK,
         Icon::Play => &tb::PLAYER_PLAY,
         Icon::Stop => &tb::PLAYER_STOP,
         Icon::Metronome => &tb::METRONOME,

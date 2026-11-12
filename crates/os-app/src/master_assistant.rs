@@ -52,7 +52,7 @@ pub fn slot(s: &State) -> Option<u8> {
     mixer::track(s, 0)?.slots.iter().enumerate().find_map(|(i, p)| {
         let p = p.as_ref()?;
         let ours = crate::plugins::canonical_name(&p.name) == NAME || crate::project_plugins::wrapped_slot(p)
-            .is_some_and(|r| crate::plugins::canonical_name(&r.name) == NAME && matches!(r.vendor.as_str(),"Lemon Studio"|"ML Studio"));
+            .is_some_and(|r| crate::plugins::canonical_name(&r.name) == NAME && matches!(r.vendor.as_str(),"Lemon Studio"|"AQUILA"));
         (i != 10 && ours).then_some(i as u8)
     })
 }
@@ -100,8 +100,7 @@ pub fn open(app: &mut App, toggle: bool) {
     let desc = &app.plugins.effects[index].desc;
     let reference = crate::project_plugins::plugin_ref(desc, Vec::new());
     let m = mixer::track_mut(&mut app.state, 0).unwrap();
-    m.slots[k as usize] = Some(os_model::SlotPlugin {
-        name: os_flp::wrapper::WRAPPER.into(), state: os_flp::wrapper::encode(None, &reference),
+    m.slots[k as usize] = Some(os_model::SlotPlugin { id: os_model::Id::NONE, name: os_flp::wrapper::WRAPPER.into(), state: os_flp::wrapper::encode(None, &reference),
     });
     m.slot_on[k as usize] = toggle; // Open alone never changes the sound.
     m.slot_mix[k as usize] = 1.0;
@@ -122,11 +121,11 @@ mod tests {
         app.state.project.arrangements = vec![os_flp::project::default_arrangement()];
         assert_eq!(destination(&app.state), Some(63));
         let m = mixer::track_mut(&mut app.state, 0).unwrap();
-        m.slots[9] = Some(os_model::SlotPlugin {name:"Existing limiter".into(),state:vec![42]});
-        m.slots[10] = Some(os_model::SlotPlugin {name:"EQ".into(),state:vec![7]});
+        m.slots[9] = Some(os_model::SlotPlugin { id: os_model::Id::NONE, name:"Existing limiter".into(),state:vec![42]});
+        m.slots[10] = Some(os_model::SlotPlugin { id: os_model::Id::NONE, name:"EQ".into(),state:vec![7]});
         assert_eq!(destination(&app.state), Some(63));
         let r = os_model::PluginRef {format:"vst3".into(), name:"Lemon Master Assistant".into(), vendor:"Lemon Studio".into(), path:LEGACY_FILE.into(), ..Default::default()};
-        mixer::track_mut(&mut app.state,0).unwrap().slots[11] = Some(os_model::SlotPlugin {name:os_flp::wrapper::WRAPPER.into(),state:os_flp::wrapper::encode(None,&r)});
+        mixer::track_mut(&mut app.state,0).unwrap().slots[11] = Some(os_model::SlotPlugin { id: os_model::Id::NONE, name:os_flp::wrapper::WRAPPER.into(),state:os_flp::wrapper::encode(None,&r)});
         assert_eq!(slot(&app.state),Some(11));
         assert!((0..mixer::user_slot_capacity(&app.state,0)).all(|i|mixer::visible_user_slot(&app.state,0,i)!=11));
         assert_eq!(mixer::slot_count(&app.state,0),11);
@@ -141,7 +140,7 @@ mod tests {
         assert!(matches!(app.state.mixer.pending.last(),Some(FxReq::Show{track:0,slot:11})));
         app.state.project.mixer[0]=os_model::MixerTrack::new(0);
         let master=mixer::track_mut(&mut app.state,0).unwrap();
-        master.slots[63]=Some(os_model::SlotPlugin{name:os_flp::wrapper::WRAPPER.into(),state:os_flp::wrapper::encode(None,&r)});
+        master.slots[63]=Some(os_model::SlotPlugin { id: os_model::Id::NONE, name:os_flp::wrapper::WRAPPER.into(),state:os_flp::wrapper::encode(None,&r)});
         master.slot_on[63]=false;
         assert_eq!(mixer::slot_count(&app.state,0),10);
         for i in 0..mixer::user_slot_capacity(&app.state,0) {

@@ -28,7 +28,7 @@ use params::EqParams;
 /// Samples kept for the analyzer.
 pub const SCOPE_LEN: usize = 1 << 15;
 
-/// What the audio thread hands the editor: the monitored signal for the analyzer.
+/// What the audio thread hands the editor: the monitored signal for the analyzer; and the instance's unsaved editor state.
 pub struct Shared {
     pub scope: Mutex<Scope>,
     pub rate: AtomicU32,
@@ -43,6 +43,8 @@ pub struct Shared {
     pub editor_h:AtomicU32,
     /// Set while an editor is open (the audio thread feeds the analyzer only then).
     pub editor_open: AtomicBool,
+    /// "Lock B" (Options menu): this instance's, not saved; it lasts while the instance lives.
+    pub lock_spare: AtomicBool,
 }
 
 pub struct Scope {
@@ -67,6 +69,7 @@ impl Default for Shared {
             threshold:std::array::from_fn(|_|AtomicU32::new((-30f32).to_bits())),
             dynamics:std::array::from_fn(|_|AtomicU32::new(0f32.to_bits())),
             editor_open: AtomicBool::new(false),
+            lock_spare: AtomicBool::new(false),
         }
     }
 }
@@ -190,7 +193,7 @@ impl LemonEq {
 
 impl Plugin for LemonEq {
     const NAME: &'static str = "ML EQ";
-    const VENDOR: &'static str = "ML Studio";
+    const VENDOR: &'static str = "AQUILA";
     const URL: &'static str = "";
     const EMAIL: &'static str = "";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
@@ -281,7 +284,7 @@ impl Plugin for LemonEq {
 // plugins by them (spec: plugins/plugin-formats.md, identity).
 impl ClapPlugin for LemonEq {
     const CLAP_ID: &'static str = "org.openstudio.open-parametric-eq-2";
-    const CLAP_DESCRIPTION: Option<&'static str> = Some("ML Studio's 7-band parametric EQ");
+    const CLAP_DESCRIPTION: Option<&'static str> = Some("AQUILA's 7-band parametric EQ");
     const CLAP_MANUAL_URL: Option<&'static str> = None;
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
     const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::AudioEffect, ClapFeature::Equalizer, ClapFeature::Stereo];

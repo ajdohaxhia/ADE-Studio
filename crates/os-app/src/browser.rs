@@ -192,6 +192,8 @@ impl App {
                 s.playlist.popup = None;
             }
             BCmd::StarterPack => crate::starter_pack::act(self,1),
+            BCmd::Jump(j) => self.browser_jump(j),
+            BCmd::Star(_) => self.state.message = Some("Favourites are kept in the sample browser".into()),
             BCmd::AddFolder => {let row=s.browser_folders.len();self.search_folder_pick(row);}
             BCmd::ConfigureFolders => self.open_settings(crate::views::settings::FILE),
             BCmd::Find(dir) => return find(s, dir),
@@ -234,8 +236,13 @@ impl App {
     pub(crate) fn browser_jump(&mut self, j: Jump) {
         self.state.show_browser = true;
         self.state.browser_auto_hidden = false;
+        let j = match j {
+            Jump::Installed | Jump::Presets | Jump::DbEffects => Jump::PluginDb,
+            j => j,
+        };
         let s = &mut self.state;
         match j {
+            Jump::Installed | Jump::Presets | Jump::DbEffects => {}
             // §1: the Current project tab with that section alone open, and selected. The search is cleared so that it
             // shows (as Browse parameters does).
             Jump::Section(name) => {
@@ -959,9 +966,21 @@ pub enum Jump {
     Find,
     /// PATTERNS > Open in project browser (Shift+Ctrl+P): the Patterns section, the other sections left as they are (§4).
     Patterns,
+    /// Upstream's plugin library entries (all installed plugins, presets, effects only): the Plugin database tab here.
+    Installed,
+    Presets,
+    DbEffects,
 }
 
 impl Jump {
+    /// Whether the jump has somewhere to go: a section the tree does not list has not, and its entry stays greyed out.
+    pub fn available(self) -> bool {
+        match self {
+            Jump::Section(name) => view::section_key(name).is_some(),
+            _ => true,
+        }
+    }
+
     /// The jump behind entry `label` of menu `menu`. `None` for other entries, and for a section the tree does not list
     /// (History, Remote control: their entries stay greyed out).
     pub fn from_label(menu: usize, label: &str) -> Option<Jump> {
@@ -986,6 +1005,10 @@ impl Jump {
 /// Options-menu commands (spec §4).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BCmd {
+    /// A way into the browser (`browser_jump`).
+    Jump(Jump),
+    /// Upstream's plugin star (favourites): not kept by this browser.
+    Star(usize),
     CatalogFilter(usize),
     /// Find previous (-1) / next (1).
     AddFolder,

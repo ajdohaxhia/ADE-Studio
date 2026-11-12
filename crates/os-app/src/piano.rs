@@ -423,6 +423,25 @@ pub fn song_tick_of(s: &State, t: u32, near: u32) -> Option<u32> {
         .map(place)
 }
 
+/// What the Playback tool's line sounds on channel `ch` moving from tick `from` to `to` (the same tick for a press): the
+/// notes it is on now and those whose start it just passed, as (key, velocity), a key once at its loudest note's velocity.
+pub fn scrub_keys(s: &State, ch: u16, from: f32, to: f32) -> Vec<(u16, u8)> {
+    let (a, b) = (from.min(to), from.max(to));
+    let mut keys: Vec<(u16, u8)> = notes(s)
+        .iter()
+        .filter(|n| n.channel == ch && !n.muted())
+        .filter(|n| {
+            let p = n.position as f32;
+            let on = p <= to && to < p + shown_len(s, n) as f32;
+            on || (p > a && p <= b)
+        })
+        .map(|n| (n.key, n.velocity))
+        .collect();
+    keys.sort_unstable_by_key(|&(k, v)| (k, std::cmp::Reverse(v)));
+    keys.dedup_by_key(|n| n.0);
+    keys
+}
+
 /// Length used for drawing: a plain step (length 0) is shown one step long (Lemon Studio choice).
 pub fn shown_len(s: &State, n: &Note) -> u32 {
     if n.length == 0 { u32::from(s.project.ppq.max(4)) / 4 } else { n.length }
@@ -1047,11 +1066,12 @@ pub fn set_rows(s: &mut State, grid: Rect, y: f32, row: f32) {
     clamp_scroll(s, grid.h);
 }
 
-/// Time zoom by `notches` wheel notches around grid x `x` (§3a).
-pub fn zoom_time(s: &mut State, g: &Geom, x: f32, notches: f32) {
+/// Time zoom by `notches` wheel notches from zoom `from` (px a beat: the zoom drawn, or where an eased zoom is going,
+/// `crate::smooth`) around grid x `x`, which keeps the tick drawn there (§3a).
+pub fn zoom_time(s: &mut State, g: &Geom, x: f32, from: f32, notches: f32) {
     let tick = g.tick_at(x);
     let p = &mut s.piano;
-    p.px_per_beat = (p.px_per_beat * 1.25f32.powf(notches)).clamp(6.0, 1600.0);
+    p.px_per_beat = (from * 1.25f32.powf(notches)).clamp(6.0, 1600.0);
     let ppt = p.px_per_beat / f32::from(s.project.ppq.max(4));
     p.scroll_x = (tick - (x - g.grid.x) / ppt).max(0.0);
 }

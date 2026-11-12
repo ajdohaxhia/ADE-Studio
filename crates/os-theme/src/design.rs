@@ -5,7 +5,7 @@
 //! Skins: the shapes and base colours of a look over the same layout. A theme (`.flstheme`) colours whichever skin is
 //! in use.
 //!
-//! `Citrus` (formerly Classic) is the measured default look. `Lemon` is ML Studio's own look: neutral greys, one
+//! `Citrus` (formerly Classic) is the measured default look. `Lemon` is AQUILA's own look: neutral greys, one
 //! blue brand colour and rounded-square controls (knobs stay round). It re-colours every token and every
 //! role-mapped literal (`Palette::s/a/h/tx/led`) through a `DesignMap` (a neutral lightness ramp plus key colours), sets
 //! the tokens the map can't get right outright, and tells the widget kit which shape language to draw (`Style`). A
@@ -23,7 +23,7 @@ pub enum Design {
     /// The measured default look (named Classic before 2026-10-17).
     #[default]
     Citrus,
-    /// ML Studio's own look: blue on neutral greys, rounded squares.
+    /// AQUILA's own look: blue on neutral greys, rounded squares.
     Lemon,
 }
 

@@ -103,7 +103,7 @@ pub struct FlTheme {
     pub back_mode: i32,
     pub back_color: Option<Color>,
     pub back_picture: String,
-    /// Lemon Studio's own key (`COLORS_KEY`, ignored by FL): the theme is a skin's own colours, the Lemon or Citrus
+    /// AQUILA's own key (`COLORS_KEY`, ignored by FL): the theme is a skin's own colours, the Lemon or Citrus
     /// theme (spec: ui/theme-presets.md §B).
     pub colors: Option<crate::Design>,
     pub appearance: crate::appearance::Appearance,
@@ -187,7 +187,7 @@ impl FlTheme {
         }
     }
 
-    /// The stock Dark theme's key colours (what Lemon Studio's default palette was measured with).
+    /// The stock Dark theme's key colours (what AQUILA's default palette was measured with).
     pub fn dark() -> FlTheme {
         FlTheme::parse(DARK_TEXT)
     }
@@ -316,7 +316,7 @@ pub fn shift(c: Color, from: Color, to: Color) -> Color {
     Color::from_hsl_pub(h2, s2.clamp(0.0, 1.0), (l + lt - lf).clamp(0.0, 1.0), c.a)
 }
 
-/// Mapping from Lemon Studio's measured default colours to a theme, per role. Default = identity.
+/// Mapping from AQUILA's measured default colours to a theme, per role. Default = identity.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Xform {
     /// Surface adjustment of the theme (`None` = the stock Dark look).

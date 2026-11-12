@@ -940,7 +940,7 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
                 let width=(w*0.42).clamp(25.,65.);
                 let value=Rect::new(rect.right()-width-12.,y+2.,width,rh-4.);
                 if let Some(list)=s.params.lists.get(&key) && let Some(entry)=list.params.get(index){
-                    let v=list.values.borrow().get(&entry.id).copied().unwrap_or(entry.default);
+                    let v=list.values.get(&entry.id).copied().unwrap_or(entry.default);
                     ui.c.fill_rrect(value,3.,t.sunken);
                     ui.c.text_center(os_ui::Font::new(11),value,t.text,&format!("{:.1}%",100.*v));
                     if !entry.read_only{ui.hit(value,Action::GenericValue(key,index),"Edit parameter value");}
@@ -1130,4 +1130,12 @@ mod tests {
         assert_eq!([at(0.5), at(2.0), at(3.5), at(5.0), at(6.0), at(8.0)], [0.0, 30.0, 60.0, 30.0, 0.0, 30.0]);
         assert_eq!(marquee_offset(3.0, 0.0), 0.0, "a label that fits stays");
     }
+}
+
+/// The Remote control section's name in the Current project tree (upstream's menu entry jumps to it).
+pub const REMOTE_CONTROL: &str = "Remote control";
+
+/// The tree key of the channel presets folder (`channel_states::root`), opened when a channel state is saved.
+pub fn channel_presets_key() -> String {
+    crate::channel_states::root().map_or_else(String::new, |d| disk_key(&d))
 }

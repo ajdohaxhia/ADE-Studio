@@ -7,14 +7,14 @@ Unicode true
 !ifndef OUTPUT
 !error "Pass /DOUTPUT=installer path"
 !endif
-Name "Lemon Studio - Michael Lane Edition"
+Name "AQUILA"
 OutFile "${OUTPUT}"
 InstallDir "$LOCALAPPDATA\Programs\Lemon Studio"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 !define MUI_ABORTWARNING
 !define MUI_ICON "..\..\crates\os-app\assets\lemonstudio.ico"
-!define MUI_WELCOMEPAGE_TEXT "Install the free Michael Lane customized edition of Lemon Studio.$\r$\n$\r$\nIncludes a native-only starter template, built-in instruments and effects, and the matching source code.$\r$\n$\r$\nClose Lemon Studio before installing. Existing projects and preferences are preserved."
+!define MUI_WELCOMEPAGE_TEXT "Install AQUILA, a free digital audio workstation based on Lemon Studio.$\r$\n$\r$\nIncludes a native-only starter template, built-in instruments and effects, and the matching source code.$\r$\n$\r$\nClose AQUILA before installing. Existing projects and preferences are preserved."
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "..\..\LICENSE"
 !insertmacro MUI_PAGE_DIRECTORY
@@ -25,10 +25,10 @@ SetCompressor /SOLID lzma
 !insertmacro MUI_LANGUAGE "English"
 !ifdef TEST_INSTALL
 !define REGKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\LemonStudio-Package-Test"
-!define SHORTCUT "$INSTDIR\Lemon Studio.lnk"
+!define SHORTCUT "$INSTDIR\AQUILA.lnk"
 !else
 !define REGKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\LemonStudio-MichaelLane"
-!define SHORTCUT "$DESKTOP\Lemon Studio.lnk"
+!define SHORTCUT "$DESKTOP\AQUILA.lnk"
 !endif
 Function .onInit
   ${IfNot} ${RunningX64}
@@ -41,12 +41,12 @@ Function .onInit
   Pop $1
   ${If} $0 != 0
     IfSilent +2
-    MessageBox MB_ICONEXCLAMATION "Save your work and close Lemon Studio before installing."
+    MessageBox MB_ICONEXCLAMATION "Save your work and close AQUILA before installing."
     Abort
   ${EndIf}
 !endif
 FunctionEnd
-Section "Lemon Studio"
+Section "AQUILA"
   SetOutPath "$INSTDIR"
   File "${PAYLOAD}\lemonstudio.exe"
   File "${PAYLOAD}\LICENSE"
@@ -64,9 +64,9 @@ Section "Lemon Studio"
   WriteRegStr HKCU "Software\Classes\.lmn" "" "LemonStudio.LmnProject"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   CreateShortcut "${SHORTCUT}" "$INSTDIR\lemonstudio.exe"
-  WriteRegStr HKCU "${REGKEY}" "DisplayName" "Lemon Studio - Michael Lane Edition"
+  WriteRegStr HKCU "${REGKEY}" "DisplayName" "AQUILA"
   WriteRegStr HKCU "${REGKEY}" "DisplayVersion" "2026.11.11.2"
-  WriteRegStr HKCU "${REGKEY}" "Publisher" "Lemon Studio contributors / Michael Lane custom edition"
+  WriteRegStr HKCU "${REGKEY}" "Publisher" "AQUILA (based on Lemon Studio by its contributors)"
   WriteRegStr HKCU "${REGKEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "${REGKEY}" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'
   WriteRegStr HKCU "${REGKEY}" "QuietUninstallString" '$\"$INSTDIR\Uninstall.exe$\" /S'

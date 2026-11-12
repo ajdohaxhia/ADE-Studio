@@ -1,6 +1,6 @@
 # ML Plasma — private development
 
-ML Studio adaptation of Gridline Plasma by lolitemaultes, pinned to commit
+AQUILA adaptation of Gridline Plasma by lolitemaultes, pinned to commit
 5ed1fa53f52df0009d2c6294a5e0b6e6861dba35 (11 November 2026 retrieval).
 Upstream: https://github.com/lolitemaultes/Gridline
 Original instrument documentation: vendor/gridline/docs/plugins/plasma.md.

@@ -1,4 +1,4 @@
-// ML Studio adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
+// AQUILA adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
 // Gridline — "plasma" pack: catalogue entry for Plasma (gl.plasma), the name
 // tables shared by the runtime and the editor (warps, filters, matrix sources,
 // effects, scales, divisions), the effect parameter definitions and the

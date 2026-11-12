@@ -721,7 +721,7 @@ fn markers_paint(ui: &mut Ui, s: &State, g: &PGeom, lane: Rect) {
     for m in pl::markers(s) {
         let x64 = g.x64(f64::from(m.position));
         let x = x64 as f32;
-        let w = pl::marker_w(m);
+        let w = pl::marker_w(s, m);
         if x > lane.right() || x + w < lane.x {
             continue;
         }

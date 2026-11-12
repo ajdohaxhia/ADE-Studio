@@ -1,4 +1,5 @@
 // Copyright (C) 2026 ItsAlphaNeon
+// Copyright (C) 2026 thacer13
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
@@ -19,9 +20,9 @@ use std::sync::{Arc, Mutex};
 use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::entry::clap_plugin_entry;
 use clap_sys::events::{
-    clap_event_header, clap_event_midi, clap_event_note, clap_event_note_expression, clap_event_param_gesture, clap_event_param_mod, clap_event_param_value,
+    clap_event_header, clap_event_midi, clap_event_midi_sysex, clap_event_note, clap_event_note_expression, clap_event_param_gesture, clap_event_param_mod, clap_event_param_value,
     clap_event_transport, clap_input_events, clap_output_events, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_CHOKE, CLAP_EVENT_NOTE_EXPRESSION,
-    CLAP_EVENT_MIDI, CLAP_EVENT_NOTE_END, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON, CLAP_NOTE_EXPRESSION_PAN, CLAP_NOTE_EXPRESSION_TUNING, CLAP_NOTE_EXPRESSION_VOLUME, CLAP_EVENT_PARAM_GESTURE_BEGIN, CLAP_EVENT_PARAM_GESTURE_END,
+    CLAP_EVENT_MIDI, CLAP_EVENT_MIDI_SYSEX, CLAP_EVENT_NOTE_END, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON, CLAP_NOTE_EXPRESSION_PAN, CLAP_NOTE_EXPRESSION_TUNING, CLAP_NOTE_EXPRESSION_VOLUME, CLAP_EVENT_PARAM_GESTURE_BEGIN, CLAP_EVENT_PARAM_GESTURE_END,
     CLAP_EVENT_PARAM_MOD, CLAP_EVENT_PARAM_VALUE, CLAP_EVENT_TRANSPORT, CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_SECONDS_TIMELINE,
     CLAP_TRANSPORT_HAS_TEMPO, CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_LOOP_ACTIVE, CLAP_TRANSPORT_IS_PLAYING,
 };
@@ -36,6 +37,7 @@ use clap_sys::ext::params::{
 };
 use clap_sys::ext::render::{clap_plugin_render, CLAP_EXT_RENDER, CLAP_RENDER_OFFLINE, CLAP_RENDER_REALTIME};
 use clap_sys::ext::state::{clap_plugin_state, clap_host_state, CLAP_EXT_STATE};
+use clap_sys::ext::thread_check::{clap_host_thread_check, CLAP_EXT_THREAD_CHECK};
 use clap_sys::ext::voice_info::{clap_host_voice_info, clap_plugin_voice_info, clap_voice_info, CLAP_EXT_VOICE_INFO};
 use clap_sys::factory::plugin_factory::{clap_plugin_factory, CLAP_PLUGIN_FACTORY_ID};
 use clap_sys::host::clap_host;
@@ -254,7 +256,7 @@ impl os_host::Library for Library {
         // A plugin compiled into this program gets a guard of its own per instance (`module_of`).
         let guard = os_host::guard::module_of(self.entry.cast());
         let name = self.plugins.iter().find(|d| d.id == id).map_or(id, |d| d.name.as_str());
-        let plugin = os_host::guard::call(&guard, || Plugin::new(&self, id)).map_err(|c| os_host::guard::stopped_text(name, c))??;
+        let plugin = os_host::guard::call(&guard, || Plugin::with_guard(&self, id, guard.clone())).map_err(|c| os_host::guard::stopped_text(name, c))??;
         Ok(os_host::share(plugin, guard))
     }
 }
@@ -290,9 +292,13 @@ struct HostData {
     /// What the plugin registered with the UI run loop (Linux): timer id or descriptor, whether a timer, token.
     #[cfg(all(unix, not(target_os = "macos")))]
     run: Mutex<Vec<(u32, bool, u64)>>,
+    /// The crash guard the instance is called under, for the run loop's callbacks into it (Linux): a crash in one
+    /// stops the instance like a crash in any other call.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    guard: Arc<os_host::guard::Module>,
 }
 
-static HOST_NAME: &CStr = c"Lemon Studio";
+static HOST_NAME: &CStr = c"AQUILA";
 static HOST_URL: &CStr = c"";
 static HOST_VERSION: &CStr = c"0.0.1";
 
@@ -317,6 +323,9 @@ unsafe extern "C" fn host_get_extension(_host: *const clap_host, id: *const c_ch
     if id == clap_sys::ext::context_menu::CLAP_EXT_CONTEXT_MENU || id == clap_sys::ext::context_menu::CLAP_EXT_CONTEXT_MENU_COMPAT {
         return &context_menu::HOST_CONTEXT_MENU as *const clap_sys::ext::context_menu::clap_host_context_menu as *const c_void;
     }
+    if id == CLAP_EXT_THREAD_CHECK {
+        return &HOST_THREAD_CHECK as *const clap_host_thread_check as *const c_void;
+    }
     #[cfg(all(unix, not(target_os = "macos")))]
     if let Some(ext) = run_loop::extension(id) {
         return ext;
@@ -328,6 +337,9 @@ unsafe extern "C" fn host_get_extension(_host: *const clap_host, id: *const c_ch
 /// connection) with the host (`timer-support`, `posix-fd-support`) and get the callbacks on the UI thread through
 /// `os_host::runloop`. Not offered on macOS: editors there run on the main thread's run loop, which the app's event
 /// loop (winit's) runs.
+///
+/// Every callback runs under the instance's crash guard (spec: plugins/plugin-formats.md, "Crash containment"). After
+/// a crash its registrations are removed and its attention raised, so the UI reports the stop and closes the editor.
 #[cfg(all(unix, not(target_os = "macos")))]
 mod run_loop {
     use super::*;
@@ -375,7 +387,8 @@ mod run_loop {
             return false;
         }
         let id = NEXT_TIMER.fetch_add(1, Ordering::Relaxed);
-        let token = runloop::add_timer(std::time::Duration::from_millis(u64::from(period_ms)), move || unsafe { on_timer(plugin, id) });
+        let dp = d as *const HostData;
+        let token = runloop::add_timer(std::time::Duration::from_millis(u64::from(period_ms)), move || unsafe { guarded(dp, || on_timer(plugin, id)) });
         if let Ok(mut r) = d.run.lock() {
             r.push((id, true, token));
         }
@@ -392,7 +405,8 @@ mod run_loop {
         let Some((plugin, ext)) = (unsafe { plugin_ext::<clap_plugin_posix_fd_support>(d, CLAP_EXT_POSIX_FD_SUPPORT) }) else { return false };
         let Some(on_fd) = (unsafe { (*ext).on_fd }) else { return false };
         // The run loop's flags are CLAP's.
-        let token = runloop::add_fd(fd, flags, move |fd, got| unsafe { on_fd(plugin, fd, got) });
+        let dp = d as *const HostData;
+        let token = runloop::add_fd(fd, flags, move |fd, got| unsafe { guarded(dp, || on_fd(plugin, fd, got)) });
         if let Ok(mut r) = d.run.lock() {
             r.push((fd as u32, false, token));
         }
@@ -420,6 +434,20 @@ mod run_loop {
             !hit
         });
         before != r.len()
+    }
+
+    /// Runs `f`, a run loop callback into the plugin of host data `dp`, under the instance's guard. Once it crashed (in
+    /// `f` or anywhere else) the plugin's registrations are removed and the UI is told.
+    ///
+    /// # Safety
+    /// `dp` is alive: a destroyed instance's registrations are removed first (`clear`), and a crashed instance's host
+    /// data is never freed.
+    unsafe fn guarded(dp: *const HostData, f: impl FnOnce()) {
+        let d = unsafe { &*dp };
+        if os_host::guard::call(&d.guard, f).is_err() {
+            clear(d);
+            d.attention.raise();
+        }
     }
 
     /// Removes whatever the plugin left registered (after it was destroyed: its callbacks must never run again).
@@ -468,12 +496,30 @@ static HOST_PARAMS: clap_host_params =
 /// The plugin's voice count changed (a patch with another polyphony): the voice list's limit is read again on the UI
 /// tick (spec: audio/voices.md §2.7).
 static HOST_VOICE_INFO: clap_host_voice_info = clap_host_voice_info { changed: Some(host_voice_info_changed) };
+/// Which thread asks (`thread-check`): the engine's rendering thread and its mixing workers are audio threads
+/// (`os_engine::parallel::on_audio_thread`; spec: audio/multicore.md "Plugins"); the main thread is the one
+/// `set_main_thread` named, or, before that, any thread that is not an audio thread.
+static HOST_THREAD_CHECK: clap_host_thread_check = clap_host_thread_check { is_main_thread: Some(host_is_main_thread), is_audio_thread: Some(host_is_audio_thread) };
+static MAIN_THREAD: std::sync::OnceLock<std::thread::ThreadId> = std::sync::OnceLock::new();
+/// Names the calling thread the main thread (the app's UI thread) for plugins that ask.
+pub fn set_main_thread() {
+    let _ = MAIN_THREAD.set(std::thread::current().id());
+}
+unsafe extern "C" fn host_is_main_thread(_host: *const clap_host) -> bool {
+    match MAIN_THREAD.get() {
+        Some(id) => *id == std::thread::current().id(),
+        None => !os_engine::parallel::on_audio_thread(),
+    }
+}
+unsafe extern "C" fn host_is_audio_thread(_host: *const clap_host) -> bool {
+    os_engine::parallel::on_audio_thread()
+}
 unsafe extern "C" fn host_voice_info_changed(host: *const clap_host) {
     unsafe { (*((*host).host_data as *const HostData)).voice_info.store(true, Ordering::Release) };
     unsafe { attend(host) };
 }
 /// The plugin's delay changed: read again on the UI tick, where `latency.get` may be called (spec:
-/// audio/delay-compensation.md "Lemon Studio").
+/// audio/delay-compensation.md "AQUILA").
 static HOST_LATENCY: clap_host_latency = clap_host_latency { changed: Some(host_latency_changed) };
 unsafe extern "C" fn host_latency_changed(host: *const clap_host) {
     unsafe { (*((*host).host_data as *const HostData)).latency.store(true, Ordering::Release) };
@@ -518,6 +564,7 @@ enum Seq {
     Mod(usize),
     Expr(usize),
     Midi(usize),
+    Levels,
 }
 
 /// One queued note event.
@@ -529,6 +576,8 @@ struct Ev {
     velocity: f32,
     /// Sample start (0..1) sent as per-note modulation of `Plugin::start_param` (0 = none).
     start: f32,
+    /// An audio clip's trimmed end (0..1) sent as per-note modulation of `Plugin::end_param` (0 = none).
+    end: f32,
     /// The note's own pan and mod X / Y (`use_note_levels`).
     levels: os_engine::NoteLevels,
     /// The engine's name for the voice (`Instrument::voice_start`): its note gets a note id, which its gains and its
@@ -538,7 +587,7 @@ struct Ev {
 
 impl Ev {
     fn new(time: u32, kind: Kind, key: u8, velocity: f32) -> Ev {
-        Ev { time, kind, key, velocity, start: 0.0, levels: os_engine::NoteLevels::default(), voice: None }
+        Ev { time, kind, key, velocity, start: 0.0, end: 0.0, levels: os_engine::NoteLevels::default(), voice: None }
     }
 }
 
@@ -629,19 +678,32 @@ pub struct Plugin {
     order: Vec<*const clap_event_header>,
     /// Parameter that takes a note's sample start as per-note modulation (`use_start_param`).
     start_param: Option<u32>,
+    /// Parameter that takes an audio clip voice's end as per-note modulation (`use_end_param`).
+    end_param: Option<u32>,
     /// Notes carry their own pan and mod X / Y (`use_note_levels`).
     note_levels: Option<NoteParams>,
     /// The channel's mod X / Y, added to each note's (`Instrument::channel_levels`).
     chan_mods: [f32; 2],
     /// Voices started with note levels, until the plugin reports their end.
     level_voices: Vec<LevelVoice>,
+    /// Automation indexes that stand for others of the list (`use_param_aliases`).
+    param_aliases: &'static [(u32, u32)],
     /// Mod amounts of sounding voices to send at the start of the next block (note id, key, parameter, amount).
     mod_resend: Vec<(i32, u8, u32, f64)>,
     /// Voices get their gains as volume note expressions (`use_voice_gains`).
     voice_gains: bool,
+    /// The channel's volume and pan go to the plugin (`use_channel_levels`): the levels it was last sent, and the
+    /// message for the next block when they changed, with the event that carries it.
+    channel_levels: bool,
+    levels_sent: Option<(f32, f32)>,
+    levels_due: Option<[u8; os_hostlink::levels::LEN]>,
+    levels_msg: [u8; os_hostlink::levels::LEN],
+    levels_ev: Option<clap_event_midi_sysex>,
     /// The voices the engine named (`Instrument::voice_start`): its name, the note id they were sent with, the key.
     named: Vec<(u32, i32, u8)>,
     next_note_id: i32,
+    /// The MIDI channel each key's last note started on (`NoteLevels::channel`): its end, choke and tuning go on it.
+    key_ch: [u8; 128],
     steady: i64,
     /// The song position for the next process call (the engine gives it while playing), and the current chunk's.
     song: Option<os_engine::TransportInfo>,
@@ -694,6 +756,13 @@ pub struct Plugin {
     /// Changes the plugin reported (its editor): gesture begin / end and values, plain.
     param_out: Vec<OutEv>,
     program_bank: std::sync::OnceLock<Vec<preset_discovery::Preset>>,
+    /// The controller outputs the plugin sent last, per MIDI channel: a pitch bend's bits and the CC's finer bits.
+    controls: [Option<(u16, Option<u8>)>; 16],
+    /// The notes it put out, kept while capturing (`os_host::Plugin::capture_notes`).
+    capture: bool,
+    notes_out: Vec<os_host::NoteOut>,
+    /// It declares a note output port (`os_host::Plugin::puts_out_notes`).
+    note_outputs: bool,
     _lib: Arc<Library>,
 }
 
@@ -704,7 +773,16 @@ enum OutEv {
     Value(u32, f64),
     End(u32),
     NoteEnd(i16, i32),
+    /// A controller output as MIDI (channel = output): a pitch bend's 14 bits, or the 7 bits below them as CC 63.
+    Bend(u8, u16),
+    Fine(u8, u8),
+    /// A note the plugin put out (CLAP note on / off, or MIDI): on, key, MIDI channel, velocity, frame in the call.
+    Note(bool, u8, u8, f32, u32),
 }
+
+/// The CC number that carries a controller output's 7 bits below its pitch bend (spec: plugins/lemon-peak-controller.md
+/// "Links").
+pub const CONTROL_FINE_CC: u8 = 63;
 
 /// Most plugin -> host parameter events kept until the app takes them.
 const MAX_OUT: usize = 4096;
@@ -732,6 +810,31 @@ unsafe extern "C" fn push_out(l: *const clap_output_events, e: *const clap_event
             if v.len() < MAX_OUT + MAX_ENDS {
                 let n = &*(e as *const clap_event_note);
                 v.push(OutEv::NoteEnd(n.key, n.note_id));
+            }
+            return true;
+        }
+        // Notes the plugin puts out (Burn MIDI to; taken right after the call, as voice ends).
+        if (*e).type_ == CLAP_EVENT_NOTE_ON || (*e).type_ == CLAP_EVENT_NOTE_OFF {
+            if v.len() < MAX_OUT + MAX_ENDS {
+                let n = &*(e as *const clap_event_note);
+                let on = (*e).type_ == CLAP_EVENT_NOTE_ON;
+                v.push(OutEv::Note(on, n.key.clamp(0, 127) as u8, n.channel.clamp(0, 15) as u8, n.velocity as f32, (*e).time));
+            }
+            return true;
+        }
+        // Controller outputs (taken right after the call, as voice ends).
+        if (*e).type_ == CLAP_EVENT_MIDI {
+            let d = (*(e as *const clap_event_midi)).data;
+            if v.len() < MAX_OUT + MAX_ENDS {
+                match d[0] & 0xF0 {
+                    0xE0 => v.push(OutEv::Bend(d[0] & 0x0F, u16::from(d[1] & 0x7F) | u16::from(d[2] & 0x7F) << 7)),
+                    0xB0 if d[1] == CONTROL_FINE_CC => v.push(OutEv::Fine(d[0] & 0x0F, d[2] & 0x7F)),
+                    s @ (0x80 | 0x90) => {
+                        let on = s == 0x90 && d[2] & 0x7F > 0;
+                        v.push(OutEv::Note(on, d[1] & 0x7F, d[0] & 0x0F, f32::from(d[2] & 0x7F) / 127.0, (*e).time));
+                    }
+                    _ => {}
+                }
             }
             return true;
         }
@@ -784,6 +887,14 @@ fn debug() -> bool {
 impl Plugin {
     /// Creates and initialises plugin `id` from `lib` (UI thread).
     pub fn new(lib: &Arc<Library>, id: &str) -> Result<Plugin, String> {
+        Self::with_guard(lib, id, os_host::guard::module_of(lib.entry.cast()))
+    }
+
+    /// [`Plugin::new`] for an instance called under `guard` ([`Library::create`]): the run loop's callbacks into it
+    /// run under the same guard (Linux).
+    fn with_guard(lib: &Arc<Library>, id: &str, guard: Arc<os_host::guard::Module>) -> Result<Plugin, String> {
+        #[cfg(not(all(unix, not(target_os = "macos"))))]
+        drop(guard);
         let desc = lib.plugins.iter().find(|d| d.id == id).cloned().ok_or_else(|| format!("{}: no plugin {id}", lib.path.display()))?;
         let host_data = Box::new(HostData {
             attention: Arc::default(),
@@ -801,6 +912,8 @@ impl Plugin {
             plugin: std::sync::atomic::AtomicPtr::new(ptr::null_mut()),
             #[cfg(all(unix, not(target_os = "macos")))]
             run: Mutex::new(Vec::new()),
+            #[cfg(all(unix, not(target_os = "macos")))]
+            guard,
         });
         let host = Box::new(clap_host {
             clap_version: CLAP_VERSION,
@@ -839,7 +952,9 @@ impl Plugin {
             let render = ext(CLAP_EXT_RENDER) as *const clap_plugin_render;
             let voice_info = ext(CLAP_EXT_VOICE_INFO) as *const clap_plugin_voice_info;
             let audio_ports = ext(CLAP_EXT_AUDIO_PORTS) as *const clap_plugin_audio_ports;
-            let bend = (!takes_clap_notes(ext(CLAP_EXT_NOTE_PORTS) as *const clap_plugin_note_ports, plugin)).then(os_engine::TuningBend::default);
+            let note_ports = ext(CLAP_EXT_NOTE_PORTS) as *const clap_plugin_note_ports;
+            let bend = (!takes_clap_notes(note_ports, plugin)).then(os_engine::TuningBend::default);
+            let note_outputs = note_ports.as_ref().and_then(|n| n.count).is_some_and(|count| count(plugin, false) > 0);
             let ranges = params::read_ranges(params, plugin);
             Ok(Plugin {
                 desc,
@@ -862,13 +977,21 @@ impl Plugin {
                 midis: Vec::with_capacity(16),
                 order: Vec::with_capacity(320),
                 start_param: None,
+                end_param: None,
                 note_levels: None,
                 chan_mods: [0.0; 2],
                 level_voices: Vec::new(),
+                param_aliases: &[],
                 mod_resend: Vec::new(),
                 voice_gains: false,
+                channel_levels: false,
+                levels_sent: None,
+                levels_due: None,
+                levels_msg: [0; os_hostlink::levels::LEN],
+                levels_ev: None,
                 named: Vec::new(),
                 next_note_id: 0,
+                key_ch: [0; 128],
                 steady: 0,
                 song: None,
                 chunk_song: None,
@@ -915,6 +1038,10 @@ impl Plugin {
                 pvals: Vec::with_capacity(params::MAX_AUTO + 64),
                 param_out: Vec::new(),
                 program_bank: Default::default(),
+                controls: [None; 16],
+                capture: false,
+                notes_out: Vec::new(),
+                note_outputs,
                 _lib: lib.clone(),
             })
         }
@@ -1032,6 +1159,8 @@ impl Plugin {
         self.ledger.clear();
         self.level_voices.clear();
         self.mod_resend.clear();
+        // Activated again, the plugin gets the levels again.
+        self.levels_sent = None;
     }
 
     /// Lets the plugin apply the parameter edits its editor queued (and drops the events it reports back: the
@@ -1070,6 +1199,21 @@ impl Plugin {
                     if id >= 0 {
                         self.level_voices.retain(|v| v.id != id);
                         self.named.retain(|v| v.1 != id);
+                    }
+                }
+                OutEv::Bend(ch, bits) => {
+                    if let Some(c) = self.controls.get_mut(usize::from(ch)) {
+                        *c = Some((bits, None));
+                    }
+                }
+                OutEv::Fine(ch, bits) => {
+                    if let Some(Some(c)) = self.controls.get_mut(usize::from(ch)) {
+                        c.1 = Some(bits);
+                    }
+                }
+                OutEv::Note(on, key, channel, velocity, offset) => {
+                    if self.capture && self.notes_out.len() < MAX_OUT {
+                        self.notes_out.push(os_host::NoteOut { offset, key, channel, velocity, on });
                     }
                 }
                 e => {
@@ -1151,11 +1295,35 @@ impl Plugin {
         false
     }
 
+    /// Sends each audio clip voice's end (`Instrument::voice_start`) as per-note modulation of the parameter named
+    /// `name` (UI thread): Lemon Sampler's own link, whose parameter is hidden and so carries no per-note flag
+    /// (nih-plug gives a hidden parameter none); the instance then ends the voice there itself
+    /// (`Instrument::voice_ends`; spec: audio/audio-clips.md "What a clip plays"). False if the plugin has no parameter
+    /// of that name.
+    pub fn use_end_param(&mut self, name: &str) -> bool {
+        self.end_param = None;
+        if self.params.is_null() {
+            return false;
+        }
+        unsafe {
+            let count = (*self.params).count.map_or(0, |c| c(self.plugin));
+            for i in 0..count {
+                let mut info: clap_param_info = std::mem::zeroed();
+                let found = (*self.params).get_info.is_some_and(|g| g(self.plugin, i, &mut info));
+                if found && CStr::from_ptr(info.name.as_ptr()).to_string_lossy() == name {
+                    self.end_param = Some(info.id);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Sends each note's own levels (`Instrument::note_start`; UI thread): its pan as a CLAP pan note expression
     /// `(pan + 1) / 2` right after the note on, with the note's id, and its mod X / Y plus the channel's as per-note
-    /// modulation of the parameters named `os_host::NOTE_MOD_X` / `NOTE_MOD_Y` when the plugin has them modulatable
-    /// per note id, the amount being the mod value times the parameter's range (an OpenStudio choice: a mod of 1 is
-    /// the knob's whole range). Sounding voices get the new amounts when the channel's mods change.
+    /// modulation of the parameters named in `os_host::NOTE_MOD_X` / `NOTE_MOD_Y` when the plugin has them
+    /// modulatable per note id, the amount being the mod value times the parameter's range (an OpenStudio choice: a
+    /// mod of 1 is the knob's whole range). Sounding voices get the new amounts when the channel's mods change.
     pub fn use_note_levels(&mut self) -> bool {
         let mut np = NoteParams::default();
         if !self.params.is_null() {
@@ -1171,9 +1339,9 @@ impl Plugin {
                     }
                     let n = CStr::from_ptr(info.name.as_ptr()).to_string_lossy();
                     if n=="Per-note drive"{np.drive=Some(info.id);continue;}
-                    let k = if n == os_host::NOTE_MOD_X {
+                    let k = if os_host::NOTE_MOD_X.contains(&&*n) {
                         0
-                    } else if n == os_host::NOTE_MOD_Y {
+                    } else if os_host::NOTE_MOD_Y.contains(&&*n) {
                         1
                     } else {
                         continue;
@@ -1192,6 +1360,21 @@ impl Plugin {
     /// plugin moves to a new volume). Without it the engine puts the clips' fades on the instance's whole output.
     pub fn use_voice_gains(&mut self) -> bool {
         self.voice_gains = true;
+        true
+    }
+
+    /// Automation of index `.0` of each pair reaches parameter `.1` of the list: a project file's indexes for the plugin
+    /// this one stands in for (spec: plugins/citrus.md).
+    pub fn use_param_aliases(&mut self, aliases: &'static [(u32, u32)]) {
+        self.param_aliases = aliases;
+    }
+
+    /// Sends the channel's volume and pan (`Instrument::channel_levels`) as the SysEx message of
+    /// `os_hostlink::levels`, at the start of the block they apply from, when they change: for Lemon Sampler, which
+    /// works them into its voices' final levels (spec: plugins/host-link.md "Channel levels"). The engine then leaves
+    /// the instance's output as it is.
+    pub fn use_channel_levels(&mut self) -> bool {
+        self.channel_levels = true;
         true
     }
 
@@ -1353,7 +1536,7 @@ impl Plugin {
             && !self.editor
             && !self.host_data.process.load(Ordering::Acquire)
             && self.queue.is_empty() && self.param_queue.is_empty() && self.auto.is_empty() && self.mod_resend.is_empty()
-            && self.midi_queue.is_empty()
+            && self.midi_queue.is_empty() && self.levels_due.is_none()
             && self.mpe_queue.is_empty()
     }
 
@@ -1370,6 +1553,25 @@ impl Plugin {
         let mut rest = Vec::new();
         // Event order; a note's modulation follows its note on at the same time.
         let mut seq: Vec<Seq> = Vec::new();
+        // The channel's levels first: they apply from the block's first frame, to the notes that start there too.
+        // `levels_msg` holds the message's bytes while the call is made.
+        self.levels_ev = None;
+        if let Some(m) = self.levels_due.take() {
+            self.levels_msg = m;
+            self.levels_ev = Some(clap_event_midi_sysex {
+                header: clap_event_header {
+                    size: std::mem::size_of::<clap_event_midi_sysex>() as u32,
+                    time: 0,
+                    space_id: CLAP_CORE_EVENT_SPACE_ID,
+                    type_: CLAP_EVENT_MIDI_SYSEX,
+                    flags: 0,
+                },
+                port_index: 0,
+                buffer: self.levels_msg.as_ptr(),
+                size: m.len() as u32,
+            });
+            seq.push(Seq::Levels);
+        }
         // Controller messages go before the block's notes (their frames are where the controller moved).
         let mut later = Vec::new();
         for &(time, data) in &self.midi_queue {
@@ -1407,6 +1609,11 @@ impl Plugin {
             seq.push(Seq::Mod(self.mods.len() - 1));
         }
         for e in self.queue.drain(..) {
+            // A note starts on its MIDI channel (MIDI channel through); what follows on its key goes on the same one.
+            if e.time < n && e.kind == Kind::On {
+                self.key_ch[usize::from(e.key & 127)] = e.levels.channel & 15;
+            }
+            let ch = i16::from(self.key_ch[usize::from(e.key & 127)]);
             if e.time < n && e.kind == Kind::Tune {
                 // Portamento glides (spec: audio/channel-voices.md): CLAP tuning expression, semitones.
                 self.exprs.push(clap_event_note_expression {
@@ -1420,7 +1627,7 @@ impl Plugin {
                     expression_id: CLAP_NOTE_EXPRESSION_TUNING,
                     note_id: -1,
                     port_index: 0,
-                    channel: 0,
+                    channel: ch,
                     key: i16::from(e.key),
                     value: f64::from(e.velocity),
                 });
@@ -1484,13 +1691,17 @@ impl Plugin {
                     },
                     note_id: id,
                     port_index: 0,
-                    channel: 0,
+                    channel: ch,
                     key: i16::from(e.key),
                     velocity: f64::from(e.velocity),
                 });
                 seq.push(Seq::Note(self.notes.len() - 1));
                 if let (Some(param), true) = (self.start_param, id >= 0 && e.start > 0.0) {
                     self.mods.push(param_mod(e.time, param, id, e.key, f64::from(e.start)));
+                    seq.push(Seq::Mod(self.mods.len() - 1));
+                }
+                if let (Some(param), true) = (self.end_param, id >= 0 && e.end > 0.0) {
+                    self.mods.push(param_mod(e.time, param, id, e.key, f64::from(e.end)));
                     seq.push(Seq::Mod(self.mods.len() - 1));
                 }
                 // The note's own levels (spec: audio/voice-levels.md "The note's own levels"): its pan as the voice's
@@ -1552,6 +1763,7 @@ impl Plugin {
                 Seq::Note(i) => self.notes[i].header.time,
                 Seq::Expr(x) => self.exprs[x].header.time,
                 Seq::Midi(m) => self.midis[m].header.time,
+                Seq::Levels => 0,
             };
             seq.sort_by_key(time);
         }
@@ -1563,6 +1775,7 @@ impl Plugin {
                 Seq::Note(i) => &self.notes[i].header as *const clap_event_header,
                 Seq::Expr(x) => &self.exprs[x].header as *const clap_event_header,
                 Seq::Midi(m) => &self.midis[m].header as *const clap_event_header,
+                Seq::Levels => self.levels_ev.as_ref().map_or(std::ptr::null(), |e| &e.header as *const clap_event_header),
             };
             let t = unsafe { (*h).time };
             while pi < self.pvals.len() && self.pvals[pi].header.time <= t {
@@ -1703,6 +1916,17 @@ impl os_host::Plugin for Plugin {
         &self.desc
     }
 
+    fn help_url(&self) -> Option<String> {
+        // SAFETY: the instance and its descriptor live as long as `self`; null pointers are checked.
+        unsafe {
+            let d = if self.plugin.is_null() { ptr::null() } else { (*self.plugin).desc };
+            if d.is_null() {
+                return None;
+            }
+            [(*d).manual_url, (*d).url].into_iter().map(|p| cstr(p)).find(|u| !u.trim().is_empty())
+        }
+    }
+
     fn activate(&mut self, rate: u32) -> bool {
         Plugin::activate(self, rate)
     }
@@ -1755,6 +1979,18 @@ impl os_host::Plugin for Plugin {
 
     fn use_voice_gains(&mut self) -> bool {
         Plugin::use_voice_gains(self)
+    }
+
+    fn use_end_param(&mut self, name: &str) -> bool {
+        Plugin::use_end_param(self, name)
+    }
+
+    fn use_channel_levels(&mut self) -> bool {
+        Plugin::use_channel_levels(self)
+    }
+
+    fn use_param_aliases(&mut self, aliases: &'static [(u32, u32)]) {
+        Plugin::use_param_aliases(self, aliases);
     }
 
     fn set_offline(&mut self, offline: bool) {
@@ -1828,6 +2064,19 @@ impl os_host::Plugin for Plugin {
         true
     }
 
+    fn capture_notes(&mut self, on: bool) {
+        self.capture = on;
+        self.notes_out.clear();
+    }
+
+    fn take_notes_out(&mut self) -> Vec<os_host::NoteOut> {
+        std::mem::take(&mut self.notes_out)
+    }
+
+    fn puts_out_notes(&self) -> bool {
+        self.note_outputs
+    }
+
     fn take_automation_requests(&mut self) -> Vec<u32> {
         self.automation_requests()
     }
@@ -1839,7 +2088,7 @@ impl os_host::Plugin for Plugin {
                 OutEv::Begin(id) => Some(os_host::ParamEvent::Begin(id)),
                 OutEv::Value(id, v) => Some(os_host::ParamEvent::Value(id, self.normalize(id, v))),
                 OutEv::End(id) => Some(os_host::ParamEvent::End(id)),
-                OutEv::NoteEnd(..) => None,
+                OutEv::NoteEnd(..) | OutEv::Bend(..) | OutEv::Fine(..) | OutEv::Note(..) => None,
             })
             .collect()
     }
@@ -1853,6 +2102,10 @@ impl os_engine::Instrument for Plugin {
     fn parallel_processing(&self) -> bool { true }
     fn active(&self) -> bool {
         self.sounding
+    }
+
+    fn param_range(&self, index: usize) -> Option<(f64, f64)> {
+        os_host::Plugin::param_info(self, index).map(|p| (p.min, p.max))
     }
 
     fn voices(&self) -> usize {
@@ -1912,12 +2165,26 @@ impl os_engine::Instrument for Plugin {
         self.queue.push(Ev::new(offset, Kind::Choke, key, 0.0));
     }
 
-    fn voice_start(&mut self, offset: u32, key: u8, velocity: f32, start: f32, levels: os_engine::NoteLevels, voice: u32) {
-        self.start_note(Ev { start: start.clamp(0.0, 1.0), levels, voice: Some(voice), ..Ev::new(offset, Kind::On, key, velocity) });
+    fn voice_start(
+        &mut self,
+        offset: u32,
+        key: u8,
+        velocity: f32,
+        start: f32,
+        end: f32,
+        levels: os_engine::NoteLevels,
+        voice: u32,
+    ) {
+        let (start, end) = (start.clamp(0.0, 1.0), end.clamp(0.0, 1.0));
+        self.start_note(Ev { start, end, levels, voice: Some(voice), ..Ev::new(offset, Kind::On, key, velocity) });
     }
 
     fn voice_gains(&self) -> bool {
         self.voice_gains
+    }
+
+    fn voice_ends(&self) -> bool {
+        self.end_param.is_some()
     }
 
     fn voice_gain(&mut self, offset: u32, voice: u32, gain: f32) {
@@ -1947,16 +2214,24 @@ impl os_engine::Instrument for Plugin {
         }
     }
 
-    /// The engine still applies the channel's volume and pan to the output (false); the channel's mod X / Y join each
-    /// note's in its modulation, and sounding voices are sent their new amounts (spec: audio/voice-levels.md "Changes
-    /// while a note sounds").
+    /// The engine applies the channel's volume and pan to the output (false), unless the plugin takes them
+    /// (`use_channel_levels`, true); the channel's mod X / Y join each note's in its modulation, and sounding voices
+    /// are sent their new amounts (spec: audio/voice-levels.md "Changes while a note sounds").
     fn channel_levels(&mut self, levels: os_engine::ChannelLevels) -> bool {
+        if self.channel_levels {
+            let now = (levels.volume, levels.pan);
+            if self.levels_sent != Some(now) {
+                self.levels_sent = Some(now);
+                self.levels_due = Some(os_hostlink::levels::encode(now.0, now.1));
+            }
+        }
+        let own = self.channel_levels;
         let mods = [levels.mod_x, levels.mod_y];
         if mods == self.chan_mods {
-            return false;
+            return own;
         }
         self.chan_mods = mods;
-        let Some(np) = self.note_levels else { return false };
+        let Some(np) = self.note_levels else { return own };
         for v in &mut self.level_voices {
             for k in 0..2 {
                 let Some((param, span)) = np.mods[k] else { continue };
@@ -1967,7 +2242,7 @@ impl os_engine::Instrument for Plugin {
                 }
             }
         }
-        false
+        own
     }
 
     fn param(&mut self, offset: u32, index: u32, value: f64) {
@@ -2053,6 +2328,10 @@ impl os_engine::HostedEffect for Plugin {
         self.effect(rate, left, right, None);
     }
 
+    fn param_range_fx(&self, index: usize) -> Option<(f64, f64)> {
+        os_host::Plugin::param_info(self, index).map(|p| (p.min, p.max))
+    }
+
     fn process_fx_keyed(&mut self, rate: u32, left: &mut [f32], right: &mut [f32], key: (&[f32], &[f32])) {
         self.effect(rate, left, right, Some(key));
     }
@@ -2067,6 +2346,20 @@ impl os_engine::HostedEffect for Plugin {
 
     fn transport_fx(&mut self, info: &os_engine::TransportInfo) {
         self.song = Some(*info);
+    }
+
+    fn control_fx(&self, k: usize) -> Option<f32> {
+        let (bend, fine) = (*self.controls.get(k)?)?;
+        Some(control_value(bend, fine))
+    }
+}
+
+/// A controller output from its MIDI: the pitch bend's 14 bits over 0..16383, or with the CC's 7 bits below them the 21
+/// bits over 0..2^21 - 1.
+fn control_value(bend: u16, fine: Option<u8>) -> f32 {
+    match fine {
+        Some(f) => ((f64::from(bend) * 128.0 + f64::from(f)) / f64::from((1u32 << 21) - 1)) as f32,
+        None => (f64::from(bend) / 16383.0) as f32,
     }
 }
 
@@ -2163,9 +2456,43 @@ impl Drop for Plugin {
 
 #[cfg(test)]
 mod mono_mock;
+#[cfg(all(test, unix, not(target_os = "macos")))]
+mod timer_mock;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A crash in a run loop callback (an editor's timer, Linux) stops the instance like a crash in any other call: its
+    /// registrations are removed and it is never called again (spec: plugins/plugin-formats.md, "Crash containment").
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn a_crash_in_a_timer_stops_the_instance() {
+        use crate::timer_mock::{ENTRY, FAULT, ID, TICKS};
+        use os_host::Library as _;
+        use std::sync::atomic::Ordering::Relaxed;
+        if !os_host::guard::contained() {
+            return;
+        }
+        let entry = &ENTRY as *const _ as *const std::ffi::c_void;
+        let lib = unsafe { Library::from_entry(entry, Path::new("Timer Test.clap")) }.expect("mock");
+        let shared = lib.create(ID.to_str().unwrap()).expect("created");
+        let stopped = || os_host::Plugin::stopped(&*shared.lock().unwrap());
+        let tick = || {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            os_host::runloop::dispatch();
+        };
+        tick();
+        assert!(TICKS.load(Relaxed) >= 1, "the timer runs");
+        assert_eq!(stopped(), None);
+        FAULT.store(true, Relaxed);
+        tick();
+        FAULT.store(false, Relaxed);
+        assert_eq!(stopped(), Some(0xC000_0005));
+        assert!(!os_host::runloop::active(), "its timer is removed");
+        let before = TICKS.load(Relaxed);
+        tick();
+        assert_eq!(TICKS.load(Relaxed), before, "never called again");
+    }
     use os_engine::Instrument;
 
     #[test]
@@ -2181,6 +2508,31 @@ mod tests {
         assert!(p.exprs.iter().any(|e|e.note_id==ids[1]&&e.expression_id==6&&e.value>0.78));
         assert!(p.exprs.iter().any(|e|e.note_id==ids[1]&&e.expression_id==5&&e.value>0.86));
         p.midi(0,[0x81,60,64]);p.process(48000,&mut l,&mut r);assert!(p.notes.iter().any(|n|n.header.type_==CLAP_EVENT_NOTE_OFF&&n.note_id==ids[0]));p.reset();assert!(p.mpe_queue.is_empty());
+    }
+
+    // spec: audio/multicore.md "Plugins"
+    /// A plugin asking which thread it is on hears "audio" on the rendering thread and on the mixing workers, "main"
+    /// elsewhere.
+    #[test]
+    fn thread_check_knows_the_audio_threads() {
+        let host = ptr::null();
+        let ext = unsafe { host_get_extension(host, CLAP_EXT_THREAD_CHECK.as_ptr()) } as *const clap_host_thread_check;
+        assert!(!ext.is_null());
+        let ext = unsafe { &*ext };
+        let (main, audio) = (ext.is_main_thread.unwrap(), ext.is_audio_thread.unwrap());
+        assert!(unsafe { !audio(host) && main(host) });
+        // The engine renders a tick inside such a scope; the workers are audio threads of their own.
+        let pool = os_engine::parallel::Pool::new(2, None);
+        let mut graph = os_engine::parallel::Graph::default();
+        graph.set(4, &mut vec![]);
+        let seen = Mutex::new(Vec::new());
+        {
+            let _scope = os_engine::parallel::AudioScope::enter();
+            assert!(unsafe { audio(host) && !main(host) });
+            assert!(pool.run(&graph, &|_, _| seen.lock().unwrap().push(unsafe { (audio(ptr::null()), main(ptr::null())) })));
+        }
+        assert_eq!(*seen.lock().unwrap(), [(true, false); 4]);
+        assert!(unsafe { !audio(host) && main(host) });
     }
 
     /// A plugin whose main ports are mono (DPF's Kars has a mono output) gets one channel each way: its output is
@@ -2320,6 +2672,25 @@ mod tests {
         os_host::Library::create(lib.clone() as Arc<dyn os_host::Library>, &lib.plugins[0].id).unwrap()
     }
 
+    /// MIDI channel through (spec: ui/channel-rack.md §18): a note on goes on its MIDI channel, and its key's note off
+    /// on the same one.
+    #[test]
+    fn notes_go_on_their_midi_channel() {
+        use os_engine::HostedEffect as _;
+        let entry = &lemon_parametric_eq_2::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void;
+        let lib = unsafe { Library::from_entry(entry, Path::new("Lemon Parametric EQ.clap")) }.expect("linked EQ");
+        let mut p = Plugin::new(&lib, &lib.plugins[0].id).unwrap();
+        assert!(os_host::Plugin::activate(&mut p, 48000));
+        let (mut l, mut r) = (vec![0.0f32; 64], vec![0.0f32; 64]);
+        p.note_start(0, 60, 0.8, 0.0, os_engine::NoteLevels { channel: 3, ..Default::default() });
+        p.note_on(0, 62, 0.8);
+        p.process_fx(48000, &mut l, &mut r);
+        assert_eq!(p.notes.iter().map(|n| (n.key, n.channel)).collect::<Vec<_>>(), [(60, 3), (62, 0)]);
+        p.note_off(0, 60);
+        p.process_fx(48000, &mut l, &mut r);
+        assert_eq!(p.notes.iter().map(|n| (n.key, n.channel)).collect::<Vec<_>>(), [(60, 3)]);
+    }
+
     /// A note's own levels (`use_note_levels`): the pan as a pan note expression with the note's id right after its
     /// note on, the mods (plus the channel's) as per-note modulation of the mod parameters; when the channel's mods
     /// change, the sounding voice is sent its new amount. Without `use_note_levels` nothing of it is sent.
@@ -2331,7 +2702,7 @@ mod tests {
         let mut p = Plugin::new(&lib, &lib.plugins[0].id).unwrap();
         assert!(os_host::Plugin::activate(&mut p, 48000));
         let (mut l, mut r) = (vec![0.0f32; 64], vec![0.0f32; 64]);
-        let own = os_engine::NoteLevels { drive:0., pan: 0.5, mod_x: 0.25, mod_y: -0.5 };
+        let own = os_engine::NoteLevels { drive:0., pan: 0.5, mod_x: 0.25, mod_y: -0.5, channel: 0 };
         // Off: a plain note.
         p.note_start(3, 60, 0.8, 0.0, own);
         p.process_fx(48000, &mut l, &mut r);
@@ -2365,6 +2736,179 @@ mod tests {
         p.take_note_ends(0);
         p.channel_levels(os_engine::ChannelLevels { mod_x: 0.5, ..Default::default() });
         assert!(p.mod_resend.is_empty());
+    }
+
+    /// Lemon Trio and Citrus take a note's mod X / Y (`use_note_levels`): the host finds their mod parameters, whose
+    /// ranges make a modulation amount of mod × range a normalized offset of the mod itself, and a note's mod X closes
+    /// Lemon Trio's filter (spec: plugins/lemon-3x-osc.md §6.1, plugins/citrus.md §2).
+    #[test]
+    fn lemon_trio_and_citrus_take_a_notes_mods() {
+        use os_engine::Instrument as _;
+        let linked = |entry: *const std::ffi::c_void, file: &str| {
+            let lib = unsafe { Library::from_entry(entry, Path::new(file)) }.expect("linked plugin");
+            let mut p = Plugin::new(&lib, &lib.plugins[0].id).unwrap();
+            assert!(p.activate(48000) && p.use_note_levels());
+            p
+        };
+        let trio = || linked(&lemon_3x_osc::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void, "Lemon Trio.clap");
+        let citrus = linked(&citrus::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void, "Citrus.clap");
+        let spans = |p: &Plugin| p.note_levels.map(|n| n.mods.map(|m| m.map(|(_, span)| span)));
+        assert_eq!(spans(&trio()), Some([Some(256.0), Some(256.0)]), "the cutoff and resonance knobs, 0..256");
+        assert_eq!(spans(&citrus), Some([Some(1.0), Some(1.0)]), "Mod X and Mod Y, normalized");
+        // Lemon Trio's default sines at key 60 through its fast low-pass, cutoff 256 - 0.75 × 256 = 64 (−3 dB at 46 Hz).
+        let peak = |mod_x: f32| {
+            let mut p = trio();
+            p.note_start(0, 60, 0.8, 0.0, os_engine::NoteLevels { mod_x, ..Default::default() });
+            let (mut l, mut r) = (vec![0.0f32; 480], vec![0.0f32; 480]);
+            let mut peak = 0.0f32;
+            for _ in 0..20 {
+                p.process(48000, &mut l, &mut r);
+                peak = l.iter().fold(0.0, |m, v| m.max(v.abs()));
+            }
+            peak
+        };
+        let (open, shut) = (peak(0.0), peak(-0.75));
+        assert!(open > 0.1 && shut < open * 0.25, "{shut} {open}");
+    }
+
+    /// Controller outputs arrive as MIDI: a pitch bend per output channel, the CC 63 after it adding 7 finer bits; they
+    /// are taken right after the call and never reach the parameter events (spec: plugins/lemon-peak-controller.md
+    /// "Links").
+    #[test]
+    fn controller_outputs_from_midi() {
+        use os_engine::HostedEffect as _;
+        let entry = &lemon_parametric_eq_2::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void;
+        let lib = unsafe { Library::from_entry(entry, Path::new("Lemon Parametric EQ.clap")) }.expect("linked EQ");
+        let mut p = Plugin::new(&lib, &lib.plugins[0].id).unwrap();
+        assert_eq!(p.control_fx(1), None);
+        p.param_out.push(OutEv::Value(3, 0.5));
+        p.param_out.push(OutEv::Bend(1, 8192));
+        p.param_out.push(OutEv::Bend(2, 16383));
+        p.param_out.push(OutEv::Fine(2, 127));
+        p.take_note_ends(0);
+        assert_eq!(p.control_fx(1), Some((8192.0 / 16383.0) as f32));
+        assert_eq!(p.control_fx(2), Some(1.0));
+        assert_eq!(p.control_fx(0), None);
+        assert_eq!(p.param_out.len(), 1, "only the parameter event is kept");
+        // A new bend drops the old fine bits.
+        p.param_out.push(OutEv::Bend(2, 0));
+        p.take_note_ends(0);
+        assert_eq!(p.control_fx(2), Some(0.0));
+        assert_eq!(control_value(4096, Some(64)), ((4096.0 * 128.0 + 64.0) / 2097151.0) as f32);
+    }
+
+    /// The notes a plugin puts out (CLAP note events or MIDI) are kept while capturing, with their frames, and dropped
+    /// otherwise; they never reach the parameter events (Burn MIDI to, spec: ui/channel-rack.md §18).
+    #[test]
+    fn notes_out_are_captured() {
+        use os_host::Plugin as _;
+        let entry = &lemon_parametric_eq_2::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void;
+        let lib = unsafe { Library::from_entry(entry, Path::new("Lemon Parametric EQ.clap")) }.expect("linked EQ");
+        let mut p = Plugin::new(&lib, &lib.plugins[0].id).unwrap();
+        assert!(!p.puts_out_notes(), "an effect without a note output port");
+        let head = |time: u32, type_: u16, size: usize| clap_event_header { size: size as u32, time, space_id: CLAP_CORE_EVENT_SPACE_ID, type_, flags: 0 };
+        let note = |time: u32, type_: u16, key: i16, velocity: f64| clap_event_note {
+            header: head(time, type_, std::mem::size_of::<clap_event_note>()),
+            note_id: -1,
+            port_index: 0,
+            channel: 2,
+            key,
+            velocity,
+        };
+        let midi = |time: u32, data: [u8; 3]| clap_event_midi { header: head(time, CLAP_EVENT_MIDI, std::mem::size_of::<clap_event_midi>()), port_index: 0, data };
+        let push = |p: &mut Plugin| {
+            let outs = clap_output_events { ctx: &mut p.param_out as *mut Vec<OutEv> as *mut c_void, try_push: Some(push_out) };
+            let (on, off) = (note(3, CLAP_EVENT_NOTE_ON, 60, 0.5), note(9, CLAP_EVENT_NOTE_OFF, 60, 0.0));
+            let (mon, moff) = (midi(4, [0x91, 64, 127]), midi(7, [0x91, 64, 0]));
+            for h in [&on.header, &mon.header, &moff.header, &off.header] {
+                assert!(unsafe { push_out(&outs, h) });
+            }
+            p.take_note_ends(0);
+        };
+        push(&mut p);
+        assert!(p.take_notes_out().is_empty() && p.param_out.is_empty(), "not capturing");
+        p.capture_notes(true);
+        push(&mut p);
+        let got: Vec<_> = p.take_notes_out().iter().map(|n| (n.offset, n.key, n.channel, n.on, n.velocity)).collect();
+        assert_eq!(got, [(3, 60, 2, true, 0.5), (4, 64, 1, true, 1.0), (7, 64, 1, false, 0.0), (9, 60, 2, false, 0.0)]);
+        assert!(p.param_out.is_empty() && p.take_param_events().is_empty());
+        p.capture_notes(false);
+        push(&mut p);
+        assert!(p.take_notes_out().is_empty());
+    }
+
+    /// Lemon Peak Controller hosted as the engine hosts a mixer slot (a call per tick, the song's transport): after each
+    /// tick its outputs are what the engine's own Fruity Peak Controller gives for the same sound, to the 21 bits they
+    /// travel in.
+    #[test]
+    fn hosted_peak_controller_matches_the_engines() {
+        use os_engine::effects::peak_ctrl::{Core, Settings};
+        use os_engine::HostedEffect as _;
+        let entry = &lemon_peak_controller::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void;
+        let lib = unsafe { Library::from_entry(entry, Path::new("Lemon Peak Controller.clap")) }.expect("linked peak controller");
+        let mut p = Plugin::new(&lib, &lib.plugins[0].id).unwrap();
+        assert!(os_host::Plugin::activate(&mut p, 44100));
+        let s = Settings { lfo_amount: 128, lfo_base: 16384, speed: 13000, ..Settings::default() };
+        let state = lemon_small_fx::params::plugin_state_from_fl(lemon_small_fx::peak_controller::SPEC, &s.to_state());
+        assert!(os_host::Plugin::load_state(&mut p, &state));
+        let mut own = Core::new(s);
+        let (tempo, spt) = (130.0, 44100.0 * 60.0 / (130.0 * 96.0));
+        let mut worst = 0.0f64;
+        for j in 0..400u64 {
+            let (a, b) = ((j as f64 * spt).round() as u64, ((j + 1) as f64 * spt).round() as u64);
+            let n = (b - a) as usize;
+            // Bursts: a loud tick every 50, quiet between.
+            let level = if j % 50 < 3 { 0.8 } else { 0.05 };
+            let mut l: Vec<f32> = (0..n).map(|i| level * ((i as f32) * 0.3).sin()).collect();
+            let mut r = l.clone();
+            let peak = l.iter().fold(0f32, |m, x| m.max(x.abs()));
+            p.transport_fx(&os_engine::TransportInfo { playing: true, tempo, frame: a, beats: j as f64 / 96.0, bar_start: 0.0, bar: 0, numerator: 4, denominator: 4, looping: None });
+            p.process_fx(44100, &mut l, &mut r);
+            own.advance(f64::from(peak), 1.0);
+            for k in 0..3 {
+                let got = f64::from(p.control_fx(k).expect("an output"));
+                worst = worst.max((got - own.outputs()[k]).abs());
+            }
+        }
+        assert!(worst < 1e-6, "{worst}");
+    }
+
+    /// Lemon Formula Controller hosted as the engine hosts a mixer slot (a call per tick, the song's transport): after
+    /// each tick its output is what the engine's own Fruity Formula Controller gives for the next tick's start, to the
+    /// 21 bits it travels in; a formula that does not compile sends nothing.
+    #[test]
+    fn hosted_formula_controller_matches_the_engines() {
+        use os_engine::effects::formula_ctrl::{Core, Settings};
+        use os_engine::HostedEffect as _;
+        let entry = &lemon_formula_controller::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void;
+        let lib = unsafe { Library::from_entry(entry, Path::new("Lemon Formula Controller.clap")) }.expect("linked formula controller");
+        let spec = lemon_small_fx::formula_controller::SPEC;
+        let mut p = Plugin::new(&lib, &lib.plugins[0].id).unwrap();
+        assert!(os_host::Plugin::activate(&mut p, 44100));
+        let s = Settings { knobs: [16384, 49152, 0], formula: "a+Sin(SongTime*Pi/2)*b*0.5+Frac(SongTime)*0.1".into(), ..Settings::default() };
+        assert!(os_host::Plugin::load_state(&mut p, &lemon_small_fx::params::plugin_state_from_fl(spec, &s.to_state())));
+        let mut own = Core::new(s);
+        let (tempo, spt) = (130.0, 44100.0 * 60.0 / (130.0 * 96.0));
+        let mut worst = 0.0f64;
+        for j in 0..400u64 {
+            let (a, b) = ((j as f64 * spt).round() as u64, ((j + 1) as f64 * spt).round() as u64);
+            let (mut l, mut r) = (vec![0.1f32; (b - a) as usize], vec![0.1f32; (b - a) as usize]);
+            p.transport_fx(&os_engine::TransportInfo { playing: true, tempo, frame: a, beats: j as f64 / 96.0, bar_start: 0.0, bar: 0, numerator: 4, denominator: 4, looping: None });
+            p.process_fx(44100, &mut l, &mut r);
+            own.advance((j + 1) as f64 / 96.0, tempo);
+            let got = f64::from(p.control_fx(0).expect("an output"));
+            worst = worst.max((got - own.output().unwrap()).abs());
+            assert_eq!(l[0], 0.1, "the sound passes through");
+        }
+        assert!(worst < 1e-6, "{worst}");
+        let bad = Settings { formula: "a*".into(), ..Settings::default() };
+        let mut p = Plugin::new(&lib, &lib.plugins[0].id).unwrap();
+        assert!(os_host::Plugin::activate(&mut p, 44100));
+        assert!(os_host::Plugin::load_state(&mut p, &lemon_small_fx::params::plugin_state_from_fl(spec, &bad.to_state())));
+        let (mut l, mut r) = (vec![0.0f32; 512], vec![0.0f32; 512]);
+        p.transport_fx(&os_engine::TransportInfo { playing: true, tempo, frame: 0, beats: 0.0, bar_start: 0.0, bar: 0, numerator: 4, denominator: 4, looping: None });
+        p.process_fx(44100, &mut l, &mut r);
+        assert_eq!(p.control_fx(0), None);
     }
 
     /// The UI locks an instance only when it has work (spec: audio/implementing.md "Playing live"): host edits waiting
@@ -2489,8 +3033,9 @@ mod tests {
         assert!(shared.lock().unwrap().activate(48000));
         let main = shared.lock().unwrap().param_info(35).unwrap().id;
         let auto_ch = Channel {
-            index: 0, kind: ChannelKind::Automation, name: None, plugin: None, color: None, enabled: true, volume: 0.78125,
-            pan: 0.0, pitch_cents: 0, mixer_track: 0, sample_path: None, layer_children: vec![], envelopes: Default::default(),
+            id: os_model::Id::NONE,
+            index: 0, kind: ChannelKind::Automation, name: None, plugin: None, color: None, enabled: true, volume: 1.0,
+            pan: -1.0, pitch_cents: 0, mixer_track: 0, sample_path: None, layer_children: vec![], envelopes: Default::default(),
             rack: Default::default(), plugin_state: None, misc: Default::default(), sound: Default::default(),
         };
         // Main level from 0 (-18 dB) to 1 (+18 dB) over 4 beats (120 BPM: 2 s).
@@ -2500,6 +3045,7 @@ mod tests {
             points: vec![AutoPoint::new(0.0, 0.0), AutoPoint::new(4.0, 1.0)],
             header: vec![0; 21],
             tail: vec![],
+            lfo: Default::default(),
         };
         let project = Project {
             ppq: 96,
@@ -2555,7 +3101,7 @@ mod tests {
         let mut p = Plugin::new(&lib, &d.id).unwrap();
         assert!(p.has_editor());
         // Give it a sample through its state (nih-plug JSON: persisted fields are JSON strings).
-        let wav = std::env::temp_dir().join("os-clap-test.wav");
+        let wav = std::env::temp_dir().join(format!("os-clap-test-{}.wav", std::process::id()));
         let tone: Vec<f32> = (0..4800).flat_map(|i| { let v = (i as f32 * 0.05).sin() * 0.5; [v, v] }).collect();
         os_engine::wav::write_f32_stereo(&mut std::fs::File::create(&wav).unwrap(), 48000, &tone).unwrap();
         let path = serde_string(&wav.to_string_lossy());
@@ -2572,7 +3118,7 @@ mod tests {
         let peak = l.iter().fold(0.0f32, |m, v| m.max(v.abs()));
         assert!(peak > 0.05, "plays the sample (peak {peak})");
         let saved = String::from_utf8_lossy(&p.save_state().unwrap()[8..]).into_owned();
-        assert!(saved.contains("os-clap-test.wav"), "{saved}");
+        assert!(saved.contains(&*wav.file_name().unwrap().to_string_lossy()), "{saved}");
     }
 
     /// A CLAP effect in a mixer slot (spec: ui/mixer.md §7): `OS_CLAP_FX=<effect>.clap` names one (skipped when unset).
@@ -2601,7 +3147,7 @@ mod tests {
     fn engine_plays_a_pattern_through_lemon_sampler() {
         let Some(lib) = lemon_sampler() else { return };
         let mut p = Plugin::new(&lib, &lib.plugins[0].id).unwrap();
-        let wav = std::env::temp_dir().join("os-clap-engine.wav");
+        let wav = std::env::temp_dir().join(format!("os-clap-engine-{}.wav", std::process::id()));
         let tone: Vec<f32> = (0..9600).flat_map(|i| { let v = (i as f32 * 0.03).sin() * 0.5; [v, v] }).collect();
         os_engine::wav::write_f32_stereo(&mut std::fs::File::create(&wav).unwrap(), 48000, &tone).unwrap();
         let state = format!("{{\"version\":\"0.0.1\",\"params\":{{}},\"fields\":{{\"sample-path\":{}}}}}", serde_string(&wav.to_string_lossy()));
@@ -2611,6 +3157,7 @@ mod tests {
         assert!(p.activate(48000));
         let shared: os_engine::SharedInstrument = Arc::new(Mutex::new(p));
         let ch = os_model::Channel {
+            id: os_model::Id::NONE,
             index: 0, kind: os_model::ChannelKind::Plugin, name: None, plugin: Some("Lemon Sampler".into()), plugin_state: None, color: None,
             enabled: true, volume: 0.78125, pan: 0.0, pitch_cents: 0, mixer_track: 0, sample_path: None,
             layer_children: vec![], envelopes: Default::default(), rack: Default::default(), misc: Default::default(), sound: Default::default(),
@@ -2644,6 +3191,7 @@ mod tests {
         assert!(p.activate(48000));
         let shared: os_engine::SharedInstrument = Arc::new(Mutex::new(p));
         let ch = os_model::Channel {
+            id: os_model::Id::NONE,
             index: 0, kind: os_model::ChannelKind::Plugin, name: None, plugin: Some("Lemon Sampler".into()), plugin_state: None, color: None,
             enabled: true, volume: 0.78125, pan: 0.0, pitch_cents: 0, mixer_track: 0, sample_path: None,
             layer_children: vec![], envelopes: Default::default(), rack: Default::default(), misc: Default::default(), sound: Default::default(),
@@ -2680,7 +3228,7 @@ mod tests {
         let Some(lib) = lemon_sampler() else { return };
         let mut p = Plugin::new(&lib, &lib.plugins[0].id).unwrap();
         // 30 s of a 441 Hz sine at 44.1 kHz.
-        let wav = std::env::temp_dir().join("os-clap-long.wav");
+        let wav = std::env::temp_dir().join(format!("os-clap-long-{}.wav", std::process::id()));
         let tone: Vec<f32> = (0..44100 * 30).flat_map(|i| { let v = (i as f32 / 44100.0 * 441.0 * std::f32::consts::TAU).sin() * 0.5; [v, v] }).collect();
         os_engine::wav::write_f32_stereo(&mut std::fs::File::create(&wav).unwrap(), 44100, &tone).unwrap();
         let state = format!("{{\"version\":\"0.0.1\",\"params\":{{}},\"fields\":{{\"sample-path\":{}}}}}", serde_string(&wav.to_string_lossy()));
@@ -2690,6 +3238,7 @@ mod tests {
         assert!(p.activate(48000));
         let shared: os_engine::SharedInstrument = Arc::new(Mutex::new(p));
         let ch = os_model::Channel {
+            id: os_model::Id::NONE,
             index: 0, kind: os_model::ChannelKind::Plugin, name: None, plugin: Some("Lemon Sampler".into()), plugin_state: None, color: None,
             enabled: true, volume: 0.78125, pan: 0.0, pitch_cents: 0, mixer_track: 0, sample_path: None,
             layer_children: vec![], envelopes: Default::default(), rack: Default::default(), misc: Default::default(), sound: Default::default(),
@@ -2730,7 +3279,7 @@ mod tests {
         let Some(lib) = lemon_sampler() else { return };
         let mut p = Plugin::new(&lib, &lib.plugins[0].id).unwrap();
         // A single-unit impulse then silence: every voice start is one spike.
-        let wav = std::env::temp_dir().join("os-clap-impulse.wav");
+        let wav = std::env::temp_dir().join(format!("os-clap-impulse-{}.wav", std::process::id()));
         let mut frame = vec![0.0f32; 48000 * 2];
         frame[0] = 1.0;
         frame[1] = 1.0;
@@ -2742,6 +3291,7 @@ mod tests {
         assert!(p.activate(48000));
         let shared: os_engine::SharedInstrument = Arc::new(Mutex::new(p));
         let ch = os_model::Channel {
+            id: os_model::Id::NONE,
             index: 0, kind: os_model::ChannelKind::Plugin, name: None, plugin: Some("Lemon Sampler".into()), plugin_state: None, color: None,
             enabled: true, volume: 0.78125, pan: 0.0, pitch_cents: 0, mixer_track: 0, sample_path: None,
             layer_children: vec![], envelopes: Default::default(), rack: Default::default(), misc: Default::default(), sound: Default::default(),
@@ -2784,7 +3334,7 @@ mod tests {
     fn lemon_sampler_parameters_change_the_sound() {
         let Some(lib) = lemon_sampler() else { return };
         // A 2 s decaying saw-ish tone at 44.1 kHz, stereo with different channels.
-        let wav = std::env::temp_dir().join("os-clap-params.wav");
+        let wav = std::env::temp_dir().join(format!("os-clap-params-{}.wav", std::process::id()));
         let n = 44100 * 2;
         let tone: Vec<f32> = (0..n)
             .flat_map(|i| {
@@ -2827,7 +3377,7 @@ mod tests {
         // realtime method) and in e3 generic (stretched first). Knob positions are 0..1 (0.9 = +960 cents, 0.75 = x2);
         // the last stretch case is out of range, as a saved state may hold, and must play clamped, not as NaN.
         // A realtime method alone has nothing to stretch at the root key and plays as Resample (spec:
-        // audio/time-stretch.md "Lemon Studio"), so it is checked the other way round below.
+        // audio/time-stretch.md "AQUILA"), so it is checked the other way round below.
         let cases = [
             ("start_offset", "{\"f32\":0.5}"), ("ts_mul", "{\"f32\":0.75}"),
             ("ts_pitch", "{\"f32\":0.9},\"ts_mode\":{\"i32\":1}"), ("ts_pitch", "{\"f32\":0.9},\"ts_mode\":{\"i32\":3}"),
@@ -2873,7 +3423,7 @@ mod tests {
         let lib = unsafe { Library::from_entry(entry, Path::new("Lemon Sampler.clap")) }.expect("linked Lemon Sampler");
         let mut p = Plugin::new(&lib, &lib.plugins[0].id).unwrap();
         // 4 s of a 441 Hz sine at 48 kHz.
-        let wav = std::env::temp_dir().join("os-clap-porta.wav");
+        let wav = std::env::temp_dir().join(format!("os-clap-porta-{}.wav", std::process::id()));
         let tone: Vec<f32> = (0..48000 * 4).flat_map(|i| { let v = (i as f32 / 48000.0 * 441.0 * std::f32::consts::TAU).sin() * 0.5; [v, v] }).collect();
         os_engine::wav::write_f32_stereo(&mut std::fs::File::create(&wav).unwrap(), 48000, &tone).unwrap();
         let state = format!("{{\"version\":\"0.0.1\",\"params\":{{}},\"fields\":{{\"sample-path\":{}}}}}", serde_string(&wav.to_string_lossy()));
@@ -2884,6 +3434,7 @@ mod tests {
         let shared: os_engine::SharedInstrument = Arc::new(Mutex::new(p));
         let misc = os_model::ChannelMisc { mono: true, porta: true, slide: 1.0, ..Default::default() };
         let ch = os_model::Channel {
+            id: os_model::Id::NONE,
             index: 0, kind: os_model::ChannelKind::Plugin, name: None, plugin: Some("Lemon Sampler".into()), plugin_state: None, color: None,
             enabled: true, volume: 0.78125, pan: 0.0, pitch_cents: 0, mixer_track: 0, sample_path: None,
             layer_children: vec![], envelopes: Default::default(), rack: Default::default(), misc, sound: Default::default(),
@@ -2984,10 +3535,10 @@ mod tests {
         assert!(p.use_voice_gains() && p.voice_gains());
         let (mut l, mut r) = (vec![0.0f32; 64], vec![0.0f32; 64]);
         let levels = os_engine::NoteLevels::default();
-        p.voice_start(0, 60, 0.8, 0.0, levels, 7);
+        p.voice_start(0, 60, 0.8, 0.0, 0.0, levels, 7);
         p.voice_gain(0, 7, 0.0);
         p.voice_gain(0, 7, 0.25);
-        p.voice_start(10, 60, 0.8, 0.0, levels, 8);
+        p.voice_start(10, 60, 0.8, 0.0, 0.0, levels, 8);
         p.voice_gain(10, 8, 1.0);
         p.process(48000, &mut l, &mut r);
         let notes: Vec<(u16, i32, i16, u32)> = p.notes.iter().map(|n| (n.header.type_, n.note_id, n.key, n.header.time)).collect();
@@ -3008,6 +3559,105 @@ mod tests {
         let _ = std::fs::remove_file(&wav);
     }
 
+    /// An audio clip voice's end (`use_end_param`): Lemon Sampler's hidden "Clip end" is found by name and given the
+    /// end as per-note modulation with the voice's note id, and the voice closes there (spec: audio/audio-clips.md
+    /// "What a clip plays"); the engine is told the instance ends its voices. Without the switch the voice plays on.
+    #[test]
+    fn a_clip_voice_ends_in_lemon_sampler() {
+        use os_engine::Instrument as _;
+        let wav = dc_wav("clip-end");
+        for linked in [true, false] {
+            let mut p = sampler_of(&wav);
+            assert!(!p.voice_ends());
+            if linked {
+                assert!(p.use_end_param("Clip end") && p.voice_ends());
+            }
+            let (mut l, mut r) = (vec![0.0f32; 2048], vec![0.0f32; 2048]);
+            // 1% of 2 s: the voice ends at frame 960 and closes over 10 ms.
+            p.voice_start(0, 60, 100.0 / 128.0, 0.0, 0.01, os_engine::NoteLevels::default(), 7);
+            p.process(48000, &mut l, &mut r);
+            let id = p.notes[0].note_id;
+            let mods: Vec<(u32, i32, f64)> = p.mods.iter().map(|m| (m.param_id, m.note_id, m.amount)).collect();
+            assert_eq!(mods, p.end_param.map(|e| (e, id, f64::from(0.01f32))).into_iter().collect::<Vec<_>>());
+            assert!(l[100] > 0.1, "{}", l[100]);
+            assert_eq!(l[1500..].iter().all(|v| *v == 0.0), linked, "linked {linked}: {}", l[1500]);
+        }
+        let _ = std::fs::remove_file(&wav);
+    }
+
+    /// An index past the plugin's list is dropped, unless an alias (`use_param_aliases`) gives it a parameter.
+    #[test]
+    fn automation_follows_the_param_aliases() {
+        let wav = dc_wav("aliases");
+        let mut p = sampler_of(&wav);
+        const FAR: u32 = 1_000_000;
+        p.automate(0, FAR, 0.5);
+        assert!(p.auto.is_empty(), "unknown index");
+        p.use_param_aliases(&[(FAR, 0)]);
+        p.automate(0, FAR, 0.5);
+        assert_eq!(p.auto.len(), 1, "reaches parameter 0");
+        assert_eq!(p.auto[0].1, p.ranges[0].0);
+    }
+
+    /// The channel's levels (`use_channel_levels`): Lemon Sampler is sent the volume and pan as the host-link message,
+    /// at the block's start and ahead of its notes, only when they change, and again after it is activated; it works
+    /// them into its voices, so the engine is told to leave the output alone. Without the switch it is told otherwise.
+    #[test]
+    fn lemon_sampler_takes_the_channel_levels() {
+        use os_engine::{ChannelLevels, Instrument as _};
+        let wav = dc_wav("levels");
+        let render = |levels: Option<ChannelLevels>| {
+            let mut p = sampler_of(&wav);
+            if let Some(levels) = levels {
+                assert!(p.use_channel_levels());
+                assert!(p.channel_levels(levels));
+            } else {
+                assert!(!p.channel_levels(ChannelLevels::default()));
+            }
+            let (mut l, mut r) = (vec![0.0f32; 512], vec![0.0f32; 512]);
+            p.note_on(0, 60, 0.8);
+            p.process(48000, &mut l, &mut r);
+            (p, l, r)
+        };
+        let (_, l0, r0) = render(None);
+        let (mut p, l, r) = render(Some(ChannelLevels { volume: 0.5, ..ChannelLevels::default() }));
+        // Without the levels a centred voice is at its note's volume (the engine's split comes after); with them, at the
+        // split of the channel's volume, `0.5 * 0.7071...` on each side.
+        assert!(l0[100] > 0.1);
+        let k = 0.5 * std::f32::consts::FRAC_1_SQRT_2;
+        for f in 0..512 {
+            assert!((l[f] - l0[f] * k).abs() <= 1e-6 && (r[f] - r0[f] * k).abs() <= 1e-6, "frame {f}: {} {}", l[f], l0[f]);
+        }
+        // The message went first, ahead of the note on at the same frame.
+        let ev = p.levels_ev.as_ref().expect("sent");
+        assert_eq!((ev.header.time, ev.header.type_), (0, CLAP_EVENT_MIDI_SYSEX));
+        assert_eq!(os_hostlink::levels::decode(&p.levels_msg), Some((0.5, 0.0)));
+        // (The plugin moved since the call: the order's pointers are stale, so the kinds are compared, from the copies
+        // the plugin read.)
+        assert_eq!(p.order.len(), 2, "the message, then the note on");
+        assert_eq!((p.notes[0].header.type_, p.notes[0].header.time), (CLAP_EVENT_NOTE_ON, 0));
+        let mut q = sampler_of(&wav);
+        q.use_channel_levels();
+        q.channel_levels(ChannelLevels { volume: 0.5, ..ChannelLevels::default() });
+        q.note_on(0, 60, 0.8);
+        let (mut l, mut r) = (vec![0.0f32; 64], vec![0.0f32; 64]);
+        q.process(48000, &mut l, &mut r);
+        assert_eq!(q.order.first().copied(), Some(&q.levels_ev.as_ref().unwrap().header as *const clap_event_header));
+        // Not again while they stay; again when they change, and after the plugin is activated anew.
+        let (mut l, mut r) = (vec![0.0f32; 64], vec![0.0f32; 64]);
+        assert!(p.channel_levels(ChannelLevels { volume: 0.5, ..ChannelLevels::default() }));
+        p.process(48000, &mut l, &mut r);
+        assert!(p.levels_ev.is_none());
+        assert!(p.channel_levels(ChannelLevels { volume: 0.5, pan: -1.0, ..ChannelLevels::default() }));
+        p.process(48000, &mut l, &mut r);
+        assert_eq!(os_hostlink::levels::decode(&p.levels_msg), Some((0.5, -1.0)));
+        p.deactivate();
+        assert!(p.activate(48000));
+        assert!(p.channel_levels(ChannelLevels { volume: 0.5, pan: -1.0, ..ChannelLevels::default() }));
+        assert!(p.levels_due.is_some());
+        let _ = std::fs::remove_file(&wav);
+    }
+
     /// Two overlapping audio clips of one sample through Lemon Sampler, as Lemon Studio plays them: one audio clip
     /// channel, one key. With automatic crossfades each voice has its own fades, so the level stays flat through the
     /// overlap and the second clip plays to its own end (spec: audio/audio-clips.md "Automatic crossfades").
@@ -3021,6 +3671,7 @@ mod tests {
             p.use_voice_gains();
             let shared: os_engine::SharedInstrument = Arc::new(Mutex::new(p));
             let ch = os_model::Channel {
+                id: os_model::Id::NONE,
                 index: 0, kind: os_model::ChannelKind::AudioClip, name: None, plugin: None, plugin_state: None, color: None,
                 enabled: true, volume: 0.78125, pan: 0.0, pitch_cents: 0, mixer_track: 0, sample_path: Some(wav.to_string_lossy().into_owned()),
                 layer_children: vec![], envelopes: Default::default(), rack: Default::default(), misc: Default::default(), sound: Default::default(),

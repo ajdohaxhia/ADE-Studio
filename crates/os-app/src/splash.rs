@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Transparent ML Studio startup mark, progress and status, drawn independently of the main window.
+//! Transparent AQUILA startup mark, progress and status, drawn independently of the main window.
 // spec: ui/settings-choices.md "Miscellaneous: naming, detached plugins and startup"
 #![cfg_attr(not(any(windows, target_os = "macos", target_os = "linux")), allow(dead_code))]
 
@@ -412,7 +412,7 @@ mod win {
             wc.hInstance = inst;
             wc.lpszClassName = class.as_ptr();
             RegisterClassW(&wc);
-            let title = wide("ML Studio");
+            let title = wide("AQUILA");
             // Layered (per-pixel alpha) and transparent to the mouse; above every window that is not topmost too; a
             // tool window takes no taskbar button; never activated, so the main window gets the focus as before.
             let hwnd = CreateWindowExW(
@@ -606,7 +606,7 @@ mod x11 {
         if let (Some(ty), Some(splash)) = (atom(b"_NET_WM_WINDOW_TYPE"), atom(b"_NET_WM_WINDOW_TYPE_SPLASH")) {
             let _ = c.change_property32(PropMode::REPLACE, win, ty, AtomEnum::ATOM, &[splash]);
         }
-        let _ = c.change_property8(PropMode::REPLACE, win, AtomEnum::WM_NAME, AtomEnum::STRING, b"ML Studio");
+        let _ = c.change_property8(PropMode::REPLACE, win, AtomEnum::WM_NAME, AtomEnum::STRING, b"AQUILA");
         let _ = c.change_property8(PropMode::REPLACE, win, AtomEnum::WM_CLASS, AtomEnum::STRING, b"lemonstudio\0LemonStudio\0");
         // No input region: clicks go through to what is behind.
         let _ = c.shape_rectangles(shape::SO::SET, shape::SK::INPUT, ClipOrdering::UNSORTED, win, 0, 0, &[]);

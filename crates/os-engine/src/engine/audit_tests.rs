@@ -30,6 +30,7 @@ fn project() -> Project {
         tempo: Some(120.),
         mixer: (0..4).map(MixerTrack::new).collect(),
         channels: vec![Channel {
+            id: os_model::Id::NONE,
             index: 0,
             kind: ChannelKind::Plugin,
             name: None,
@@ -264,6 +265,7 @@ fn own_state() {
     let mut p = project();
     p.channels.clear();
     p.mixer[1].slots[0] = Some(SlotPlugin {
+        id: os_model::Id::NONE,
         name: "Fruity Balance".into(),
         state: crate::effects::balance::Settings { v: [0, 256] }.to_state(),
     });

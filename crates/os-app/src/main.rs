@@ -8,8 +8,11 @@
 // Plugin windows exist on Windows, Linux and macOS (`plugin_window`): elsewhere what only they reach (the Misc tab, the
 // window and preset menus, their requests) is built but unused. Those builds still report real dead code.
 #![cfg_attr(not(plugin_windows), allow(dead_code))]
+// Windows: a GUI program, so started from Explorer, the Start menu or a shortcut it opens no console window beside its
+// own. Started from a terminal it still writes there (`attach_console`).
 #![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 
+mod anim;
 mod app;
 mod collaboration;
 mod marker_profiles;
@@ -20,6 +23,10 @@ mod ai_control;
 mod ai_commands;
 mod updates;
 mod donate;
+mod arrange;
+mod audio_clipboard;
+mod help_links;
+mod diagnostics;
 mod audio_cfg;
 mod auto_close;
 mod autoscroll;
@@ -28,6 +35,10 @@ mod safe_save;
 #[cfg(test)] mod audit_fixes;
 #[cfg(test)]
 mod audio_bench;
+#[cfg(target_os = "linux")]
+mod dropout_log;
+#[cfg(test)]
+mod checks;
 #[cfg(test)]
 mod open_bench;
 mod browser;
@@ -41,19 +52,29 @@ mod starter_pack;
 mod feedback;
 mod change_log;
 mod help;
+mod browser_index;
+mod burn_midi;
 mod cable;
 mod capture;
 mod input_monitor;
 mod detached;
 mod edited_sample;
+mod replace_file;
+mod panic_log;
+#[cfg(target_os = "linux")]
+mod rt;
 mod one_click;
+mod track_rec;
+mod audio_log;
 mod score_log;
 mod clip_colors;
 mod clock;
+mod control;
 mod cpu;
 mod data_folder;
 mod device;
 mod dialog;
+mod floating;
 mod filedlg;
 mod enable_groups;
 mod export;
@@ -67,11 +88,13 @@ mod icons;
 mod init;
 mod knobs;
 mod layout;
+mod lemon_state;
 mod loading;
 mod missing;
 mod import_report;
 mod drop_preview;
 mod playlist_motion;
+mod mix_threads;
 mod zipped;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -86,7 +109,10 @@ mod midi_file;
 mod midi_in;
 mod mpe;
 mod midi_out;
+mod lemon_midi_out;
+mod track_links;
 mod midi_play;
+mod container;
 mod mixer;
 mod rack_mixer;
 #[cfg(any(windows,target_os="macos"))] mod strip_geometry;
@@ -96,9 +122,15 @@ mod mini_eq;
 mod mixer_recording;
 mod smart_recording;
 mod comping;
+mod mixer_state;
 mod osc3;
 mod citrus;
+mod smith;
+mod chord_tool;
+mod slicer;
+mod drums;
 mod monitor;
+mod motion;
 mod params;
 mod piano;
 mod piano_note_mode;
@@ -124,6 +156,7 @@ mod master_assistant;
 mod route_picker;
 mod patterns;
 mod perf;
+mod perform;
 mod playlist;
 mod loop_fit;
 mod stem_separation;
@@ -133,6 +166,7 @@ mod clip_picker;
 mod plugin_db;
 mod plugin_manager;
 mod plugin_menu;
+mod plugin_palette;
 mod plugin_popup;
 mod plugin_rebuild;
 mod plugin_scan;
@@ -167,6 +201,8 @@ mod vintage_rack_art;
 mod vintage_skin;
 mod menu_layout;
 mod input_bindings;
+mod update;
+mod version;
 mod shortcuts;
 mod warp;
 mod vocal_align;
@@ -184,6 +220,7 @@ mod strum;
 mod flam;
 mod flip;
 mod levels;
+mod channel_states;
 mod chords;
 mod harmony;
 mod claw;
@@ -196,6 +233,7 @@ mod piano_dlg;
 mod arpeggiate;
 mod tapper;
 mod touch;
+mod events;
 mod record;
 mod record_lead;
 mod recent;
@@ -209,6 +247,7 @@ mod timesig;
 mod transport;
 mod typein;
 mod views;
+mod detached_win;
 mod wallpaper;
 mod waves;
 mod win_clamp;
@@ -247,6 +286,8 @@ struct Shell {
     /// The held cursor is locked by the window system (Wayland's pointer lock): it stays put by itself and cannot be
     /// warped. Otherwise (Windows, X11) it is warped back to the anchor after each move.
     pointer_locked: bool,
+    /// The held cursor's window: a detached window's (`detached_win`), or the main window's (`None`).
+    lock_on: Option<app::Win>,
     cursor: app::Cursor,
     cursor_scale: u16,
     cursor_pack: u8,
@@ -286,6 +327,10 @@ struct Shell {
     /// The main window's restored frame and whether it is maximized, kept for the next start as the app closes
     /// (`layout`): the last run's at first, then followed as the window moves and resizes (`follow_frame`).
     main_win: Option<layout::MainWin>,
+    /// The detached windows' native windows (Options ▸ Detached, `detached_win`).
+    det_wins: Vec<detached_win::DetWin>,
+    /// The key event being handled came to this detached window: it goes to the app on that window's surface.
+    key_on: Option<app::Win>,
 }
 
 /// Frame timing for tuning (`OS_FRAMES=<file>`): per frame the time, what was repainted (`full` or the number of
@@ -544,12 +589,25 @@ impl Shell {
     /// with raw motion driving the virtual position `virt` (`device_event`).
     fn lock_cursor(&mut self, window: &Window, anchor: (f64, f64), virt: (f32, f32)) {
         self.lock = Some((anchor, virt));
+        self.lock_on = None;
         self.pointer_locked = window.set_cursor_grab(CursorGrabMode::Locked).is_ok();
         window.set_cursor_visible(false);
     }
 
+    /// The window holding the cursor (`lock_on`).
+    fn lock_window(&self) -> Option<Rc<Window>> {
+        match self.lock_on {
+            Some(w) => self.det_wins.iter().find(|d| d.win == w).map(|d| d.window.clone()),
+            None => self.window.clone(),
+        }
+    }
+
     /// Ends a held drag: the cursor shows again where the drag started, as if it never moved.
-    fn unlock_cursor(&mut self, window: &Window) {
+    fn unlock_cursor(&mut self) {
+        let Some(window) = self.lock_window() else {
+            self.lock = None;
+            return;
+        };
         let Some((anchor, _)) = self.lock.take() else { return };
         // Under a pointer lock this is where the cursor reappears once unlocked.
         let _ = window.set_cursor_position(winit::dpi::PhysicalPosition::new(anchor.0, anchor.1));
@@ -702,6 +760,11 @@ impl Shell {
         if self.app.want_exit {
             el.exit();
         }
+        // Ctrl+C in the terminal, or a kill: closes without asking (`exiting` keeps unsaved changes as a backup).
+        #[cfg(unix)]
+        if stop_signal::asked() {
+            el.exit();
+        }
         // macOS: Quit from the menu bar or the Dock asks about unsaved changes as closing the window does; AppKit waits
         // for the answer. A Quit while a dialog is open is turned down (the dialog is answered first).
         #[cfg(target_os = "macos")]
@@ -743,6 +806,7 @@ impl Shell {
         self.pending |= self.app.tick();
         self.prepare_main();
         if let Some(window)=self.window.clone() { self.sync_cursor(&window,el); }
+        self.sync_detached(el);
         // The startup splash: the opened project's loading moves its gauge on; once the main window has shown and
         // nothing is loading, it finishes. It is dropped when it has faded away.
         if let Some(s) = &self.splash {
@@ -803,7 +867,7 @@ impl ApplicationHandler for Shell {
         }
         splash::step(&self.splash, splash::WINDOW, "Opening the main window");
         let attrs = Window::default_attributes()
-            .with_title("ML Studio")
+            .with_title("AQUILA")
             .with_decorations(false)
             .with_inner_size(LogicalSize::new(1920.0, 1080.0))
             // Layouts are measured at 1920x1080 and are not responsive yet; below this they break.
@@ -836,7 +900,7 @@ impl ApplicationHandler for Shell {
                 .with_maximized(m.max),
             None => attrs,
         };
-        // App icon: resource 1, embedded by build.rs from assets/lemonstudio.ico.
+        // App icon: resource 1, embedded by build.rs from assets/lemonstudio.ico (a nightly's: lemonstudio-nightly.ico).
         #[cfg(windows)]
         let attrs = {
             use winit::dpi::PhysicalSize;
@@ -936,6 +1000,8 @@ impl ApplicationHandler for Shell {
     fn exiting(&mut self, _el: &ActiveEventLoop) {
         if !os_host::guard::tripped() { self.app.transport.shutdown(); }
         self.detached.save();
+        // An update to install: the updater waits for this process to end (`update`).
+        self.app.updates.on_exit();
         if let Some(window) = self.window.clone() {
             self.follow_frame(&window);
         }
@@ -943,6 +1009,11 @@ impl ApplicationHandler for Shell {
             layout::save_main(m);
         }
         layout::save(&self.app.state);
+        // Stopped by a signal with changes unsaved: nobody was asked, so they go to a backup.
+        #[cfg(unix)]
+        if stop_signal::asked() && self.app.unsaved() {
+            let _ = self.app.write_backup(chrono::Local::now().naive_local());
+        }
         #[cfg(target_os = "macos")]
         {
             if os_host::guard::tripped() {
@@ -953,21 +1024,33 @@ impl ApplicationHandler for Shell {
         }
     }
 
-    /// Raw mouse motion drives a locked scroll-bar drag; the hidden cursor is held at the anchor.
+    /// Raw mouse motion drives a locked scroll-bar drag; the hidden cursor is held at the anchor. Held in a detached
+    /// window, the motion goes to that window's surface.
     fn device_event(&mut self, _el: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
-        let (DeviceEvent::MouseMotion { delta }, Some((anchor, virt)), Some(window)) = (event, self.lock, self.window.clone()) else { return };
+        let (DeviceEvent::MouseMotion { delta }, Some((anchor, virt)), Some(window)) = (event, self.lock, self.lock_window()) else { return };
         let scale = ui_scale(&window);
         let v = (virt.0 + (delta.0 / scale) as f32, virt.1 + (delta.1 / scale) as f32);
         self.lock = Some((anchor, v));
-        self.app.mouse_move(v.0, v.1);
+        self.app.on(self.lock_on, |a| a.mouse_move(v.0, v.1));
         if !self.pointer_locked {
             let _ = window.set_cursor_position(winit::dpi::PhysicalPosition::new(anchor.0, anchor.1));
+        }
+        if self.lock_on.is_some_and(|w| self.app.detached_dirty(w)) {
+            window.request_redraw();
         }
         self.pending = true;
     }
 
-    fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        if self.detached.owns(_id) {if self.app.state.native_view.is_none(){self.main_mouse=self.app.mouse;}self.detached.event(&mut self.app,el,_id,event,&mut self.tool_cursors);self.prepare_main();self.pending|=self.app.has_damage();return;}
+    fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if self.detached.owns(id) {if self.app.state.native_view.is_none(){self.main_mouse=self.app.mouse;}self.detached.event(&mut self.app,el,id,event,&mut self.tool_cursors);self.prepare_main();self.pending|=self.app.has_damage();return;}
+        // A detached window's native window: its own handling, but for its keys, which go where the main window's do.
+        let det = self.detached_of(id);
+        self.key_on = det.map(|i| self.det_wins[i].win);
+        if let Some(i) = det {
+            if !matches!(event, WindowEvent::KeyboardInput { .. } | WindowEvent::ModifiersChanged(_)) {
+                return self.detached_event(i, event);
+            }
+        }
         self.prepare_main();
         if matches!(event,WindowEvent::MouseInput{state:ElementState::Pressed,..}|WindowEvent::KeyboardInput{..}|WindowEvent::Focused(true)) {
             if self.app.state.native_input.take().is_some() {let popup=self.app.state.playlist.popup.is_some()||self.app.state.menu_open.is_some();self.app.state.playlist.popup=None;self.app.state.menu_open=None;if popup {self.app.invalidate();}}
@@ -1039,6 +1122,11 @@ impl ApplicationHandler for Shell {
                 // Locked: movement comes from raw motion (`device_event`); positions are ignored,
                 // since hiding the cursor makes Windows report a jump to the window centre.
                 if self.lock.is_some() {
+                    return;
+                }
+                // A browser item dragged over a detached window goes to that window (`cross_move`).
+                if self.app.cross_drag() && self.cross_move(None, (position.x, position.y)) {
+                    self.sync_cursor(&window, el);
                     return;
                 }
                 if let (Some((at, grab_y)), Some((cursor, (l, _, r, _)))) = (self.unmax, screen_state(&window)) {
@@ -1118,8 +1206,8 @@ impl ApplicationHandler for Shell {
                     self.grab = None;
                     self.unmax = None;
                     if crate::input_bindings::accepts_release(&self.app,0) {
-                        self.unlock_cursor(&window);
-                        self.app.mouse_up();
+                        self.unlock_cursor();
+                        self.app.mouse_up_from(None);
                     }
                     if self.app.resize_cursor && self.app.drag.is_none() {
                         self.app.resize_cursor = false;
@@ -1143,8 +1231,8 @@ impl ApplicationHandler for Shell {
             }
             WindowEvent::MouseInput { state: ElementState::Released, button: button @ (MouseButton::Right | MouseButton::Middle), .. } => {
                 if crate::input_bindings::accepts_release(&self.app,if button==MouseButton::Right {1}else{2}) {
-                    self.unlock_cursor(&window);
-                    self.app.mouse_up();
+                    self.unlock_cursor();
+                    self.app.mouse_up_from(None);
                 }
                 self.pending = true;
             }
@@ -1215,9 +1303,17 @@ impl ApplicationHandler for Shell {
                         event
                     };
                     self.app.repeat = event.repeat;
-                    self.app.key(&event.logical_key, ctrl(self.mods), self.mods.alt_key());
+                    self.app.code = match event.physical_key {
+                        winit::keyboard::PhysicalKey::Code(code) => Some(code),
+                        _ => None,
+                    };
+                    // The key acts in the window that has the keyboard (the one it came to), and a popup or box it
+                    // opens shows there.
+                    let (key, c, alt) = (&event.logical_key, ctrl(self.mods), self.mods.alt_key());
+                    self.app.key_on(self.key_on, key, c, alt);
                     self.sync_cursor(&window,el);
                     self.app.repeat = false;
+                    self.app.code = None;
                     window.request_redraw();
                 }
             }
@@ -1444,12 +1540,13 @@ impl ApplicationHandler for Shell {
     }
 }
 
-/// The application id on Linux: Wayland's app id and X11's WM_CLASS, matching `assets/lemonstudio.desktop`.
+/// The application id on Linux: Wayland's app id and X11's WM_CLASS, matching `assets/lemonstudio.desktop` (a nightly's
+/// AppImage: `lemonstudio-nightly.desktop`, `tools/package/appimage.sh`).
 #[cfg(all(unix, not(target_os = "macos")))]
-const APP_ID: &str = "lemonstudio";
+const APP_ID: &str = if version::NIGHTLY { "lemonstudio-nightly" } else { "lemonstudio" };
 
-/// The app icon as RGBA bytes, width and height: `assets/lemonstudio.png`, 256 px (X11 windows show it; Wayland takes the
-/// desktop entry's).
+/// The app icon as RGBA bytes, width and height: `assets/lemonstudio.png` (a nightly's: `lemonstudio-nightly.png`), 256 px
+/// (X11 windows show it; Wayland takes the desktop entry's).
 #[cfg(all(unix, not(target_os = "macos")))]
 pub(crate) fn icon_rgba() -> Option<(Vec<u8>, u32, u32)> {
     let png = tiny_skia::Pixmap::decode_png(linux_launcher::ICON).ok()?;
@@ -1530,7 +1627,7 @@ fn screenshot(args: &[String]) {
             "--browser-tab" => browser_tab = it.next().and_then(|v| v.parse().ok()),
             // The browser's width incl. its splitter, as dragged (spec: ui/browser.md §9).
             "--browser-width" => browser_w = it.next().and_then(|v| v.parse().ok()),
-            // "all" / "gen" / "fx": that plugin menu at the window's centre (spec: ui/plugin-menu.md §5).
+            // "all" / "gen" / "fx": the plugin palette of that list near the window's top centre (spec: ui/plugin-menu.md §5, §6).
             "--plugin-menu" => {
                 plugin_menu = Some(match it.next().map(String::as_str) {
                     Some("gen") => plugin_menu::Target::Gen(None),
@@ -1558,7 +1655,7 @@ fn screenshot(args: &[String]) {
                 }
             }
             // The wheel turned `dy` notches at x,y after the first paint, before the clicks (scrolls a page, e.g.
-            // `--settings 5 --wheel 960,500,-40` shows the Theme page's buttons); may be given more than once.
+            // `--settings 6 --wheel 960,500,-40` shows the Theme page's buttons); may be given more than once.
             "--wheel" => {
                 let v: Vec<f32> = it.next().map(|v| v.split(',').filter_map(|n| n.parse().ok()).collect()).unwrap_or_default();
                 if let [x, y, dy] = v[..] {
@@ -1568,7 +1665,7 @@ fn screenshot(args: &[String]) {
             "--lane" => lane = it.next().and_then(|v| v.parse().ok()),
             "--pans" => pans = it.next().map(|v| v.split(',').filter_map(|p| p.parse().ok()).collect()),
             "--settings" => settings = it.next().and_then(|v| v.parse().ok()),
-            // With --settings 7: that Info box (0 title .. 4 web link) being edited.
+            // With --settings 8: that Info box (0 title .. 4 web link) being edited.
             "--info-edit" => info_edit = it.next().and_then(|v| v.parse().ok()),
             "--lane-menu" => lane_menu = true,
             "--menu" => menu = it.next().and_then(|v| v.parse().ok()),
@@ -1724,7 +1821,7 @@ fn screenshot(args: &[String]) {
     }
     if let Some(target) = plugin_menu {
         let (w, h) = app.state.screen;
-        app.open_plugin_menu(target, ((w / 2.0).round(), (h / 3.0).round()));
+        app.open_plugin_palette(target, ((w / 2.0 - crate::plugin_palette::W / 2.0).round(), (h / 4.0).round()), None);
     }
     if let Some((p, piano)) = import_midi {
         // Alt: the MIDI import window's "Show every time" row as it comes.
@@ -1786,7 +1883,7 @@ fn screenshot(args: &[String]) {
         // Set without keeping them (`cpu_panel.txt` stays as the user left it).
         app.state.cpu.fps_view = v == "fps";
         app.state.cpu.misc = v == "misc";
-        app.state.cpu.update(Instant::now(), None, 0, 0);
+        app.state.cpu.update(Instant::now(), None, 0, 0, 0);
     }
     // No "Opened <path>" in the title: the frame shows the project, not where it lives on disk.
     app.state.message = None;
@@ -1918,6 +2015,37 @@ fn use_x11() -> bool {
     std::env::var_os("DISPLAY").is_some_and(|d| !d.is_empty()) && x11rb::rust_connection::RustConnection::connect(None).is_ok()
 }
 
+/// SIGINT (Ctrl+C in the terminal) and SIGTERM: the program closes as it does with its window, within a tick. A second
+/// one ends it at once, should the first not get through.
+#[cfg(unix)]
+mod stop_signal {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static ASKED: AtomicBool = AtomicBool::new(false);
+
+    extern "C" fn on_signal(_: libc::c_int) {
+        if ASKED.swap(true, Ordering::AcqRel) {
+            // SAFETY: ends the process; safe in a signal handler.
+            unsafe { libc::_exit(130) };
+        }
+    }
+
+    pub fn install() {
+        // SAFETY: installs a handler that only touches an atomic and may call `_exit`.
+        unsafe {
+            let mut sa: libc::sigaction = std::mem::zeroed();
+            sa.sa_sigaction = on_signal as extern "C" fn(libc::c_int) as usize;
+            libc::sigemptyset(&mut sa.sa_mask);
+            libc::sigaction(libc::SIGINT, &sa, std::ptr::null_mut());
+            libc::sigaction(libc::SIGTERM, &sa, std::ptr::null_mut());
+        }
+    }
+
+    pub fn asked() -> bool {
+        ASKED.load(Ordering::Acquire)
+    }
+}
+
 fn wake_ui() {
     if !WAKE_PENDING.swap(true, std::sync::atomic::Ordering::AcqRel) {
         if let Ok(p) = PROXY.lock() {
@@ -1962,8 +2090,41 @@ fn apply_window_cursor(window: &Window, el: &ActiveEventLoop, c: app::Cursor, sc
             });
 }
 
+/// Windows: a GUI program gets a console only through handles its parent passes it (`cargo run`, a pipe, the plugin
+/// scanner's parent). Without them, the terminal it was started from (if any) takes its output, so `--render` and the
+/// errors printed before the window opens still show there.
+#[cfg(windows)]
+fn attach_console() {
+    use windows_sys::Win32::System::Console::{AttachConsole, GetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
+    unsafe {
+        if GetStdHandle(STD_OUTPUT_HANDLE).is_null() && GetStdHandle(STD_ERROR_HANDLE).is_null() {
+            AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+    }
+}
+
+/// Linux: the sound server lists Lemon Studio's audio streams by its name and icon, not as an "ALSA plug-in":
+/// PipeWire's ALSA plugin reads `PIPEWIRE_ALSA`, PulseAudio's `PULSE_PROP`. A value the user set is kept.
+#[cfg(target_os = "linux")]
+fn name_audio_streams() {
+    let names = [
+        ("PIPEWIRE_ALSA", "{ application.name = \"AQUILA\" node.description = \"AQUILA\" application.icon-name = \"lemonstudio\" }"),
+        ("PULSE_PROP", "application.name='AQUILA' application.icon_name=lemonstudio"),
+    ];
+    for (var, value) in names {
+        if std::env::var_os(var).is_none() {
+            // SAFETY: called first in `main`, before any other thread exists.
+            unsafe { std::env::set_var(var, value) };
+        }
+    }
+}
+
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(target_os = "linux")]
+    name_audio_streams();
+    #[cfg(windows)]
+    attach_console();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str)==Some("--build-flavour") {
         #[cfg(feature="master-assistant")]
         println!("{}", master_assistant::build_flavour());
@@ -2030,6 +2191,10 @@ fn main() {
         std::fs::write(output, report).expect("write startup report");
         return;
     }
+    // From here on a panic is kept in the user folder's Logs (`panic_log`).
+    panic_log::install();
+    // The mixing threads every engine renders on, from here on (spec: audio/multicore.md).
+    mix_threads::start();
     // A render without a window (FILE > Export audio from the command line, `render`).
     if args.first().map(String::as_str) == Some("--render") {
         std::process::exit(render::cli(&args[1..]));
@@ -2037,6 +2202,15 @@ fn main() {
     if args.iter().any(|a| a == "--screenshot") {
         screenshot(&args);
         return;
+    }
+    // The control plane's socket (spec: roadmap/control-plane.md): beside the window, or without one.
+    let control = control::server::Flags::take(&mut args).unwrap_or_else(|e| {
+        eprintln!("AQUILA: {e}");
+        std::process::exit(2);
+    });
+    let level = control.level.unwrap_or(control::Level::Edit);
+    if let Some(at) = &control.serve {
+        control::server::serve_headless(at, level, control.token.clone(), args.first().map(std::path::PathBuf::from));
     }
     // Run from source: Lemon Studio's own plugins are rebuilt and installed before the plugin scan looks for them.
     plugin_rebuild::run();
@@ -2059,6 +2233,8 @@ fn main() {
         *p = Some(event_loop.create_proxy());
     }
     os_clap::set_waker(wake_ui);
+    // CLAP plugins asking which thread they are on (`thread-check`): this one is the main thread.
+    os_clap::set_main_thread();
     // Lemon plugins' editors run on threads of their own off Windows and wake the app when they send something.
     #[cfg(not(windows))]
     os_hostlink::set_host_waker(wake_ui);
@@ -2079,6 +2255,20 @@ fn main() {
         // Ask for data folder "On startup": the New project form over it (spec: ui/data-folder.md §7).
         app.startup_form();
     }
+    if let Some(at) = &control.control {
+        app.state.message = Some(match control::server::start(at, level, wake_ui) {
+            Ok(mut server) => {
+                if control.token.is_some() {
+                    server.token = control.token.clone();
+                }
+                let m = format!("Control plane: {}", server.describe());
+                eprintln!("AQUILA: {m}");
+                app.listen(server);
+                m
+            }
+            Err(e) => format!("Control plane: could not listen at {at}: {e}"),
+        });
+    }
     // The windows where the last run left them.
     layout::restore(&mut app.state);
     // Keep the real launch result available when an installed app differs from a startup check.
@@ -2093,6 +2283,8 @@ fn main() {
         ));
         let _ = std::fs::write(report.with_file_name("startup-folder-evidence.txt"), format!("{startup_folder_evidence:?}"));
     }
+    // How the last update went, and the check for a newer build (release builds; `update`).
+    app.update_startup();
     // MIDI devices (spec: ui/midi-settings.md §2): the enabled inputs play the selected channel; master sync goes out.
     splash::step(&splash, splash::MIDI, "Opening MIDI devices");
     app.midi = midi_in::MidiIn::open(wake_ui);
@@ -2116,6 +2308,7 @@ fn main() {
         last_click: Instant::now() - Duration::from_secs(10),
         lock: None,
         pointer_locked: false,
+        lock_on: None,
         cursor: app::Cursor::Default,
         cursor_scale: 0,
         cursor_pack: 0,
@@ -2140,9 +2333,13 @@ fn main() {
         watchdog,
         ctrl_click: false,
         main_win: layout::main_win(),
+        det_wins: Vec::new(),
+        key_on: None,
     };
     if let Some(result)=updates::take_result() { shell.app.state.message=Some(result); }
     updates::start();
+    #[cfg(unix)]
+    stop_signal::install();
     event_loop.run_app(&mut shell).expect("run");
     // After a contained plugin crash the process ends here, before plugin files are unloaded (a stopped plugin's code
     // must not run again).

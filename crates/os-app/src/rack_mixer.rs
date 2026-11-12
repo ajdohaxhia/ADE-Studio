@@ -85,7 +85,7 @@ fn choose(app:&mut App,n:u16,index:usize,all:bool,state:Option<Vec<u8>>)->Result
         #[cfg(any(windows,target_os="macos"))] if let Err(e)=validate(app,t,k){for (t,k) in made{app.plugins.drop_key(crate::plugins::fx_key(t,k));}return Err(e);}
     }
     record(app,old);
-    for &(t,k) in &dest {let r=crate::project_plugins::plugin_ref(&desc,app.plugins.state(crate::plugins::fx_key(t,k)).unwrap_or_default());let p=if desc.format==os_host::Format::Native {os_model::SlotPlugin{name:desc.id.clone(),state:r.state}}else{os_model::SlotPlugin{name:os_flp::wrapper::WRAPPER.into(),state:os_flp::wrapper::encode(None,&r)}};mixer::track_mut(&mut app.state,t).ok_or("The destination mixer channel no longer exists.")?.slots[k as usize]=Some(p);bind(&mut app.state,t,k);}
+    for &(t,k) in &dest {let r=crate::project_plugins::plugin_ref(&desc,app.plugins.state(crate::plugins::fx_key(t,k)).unwrap_or_default());let p=if desc.format==os_host::Format::Native {os_model::SlotPlugin { id: os_model::Id::NONE, name:desc.id.clone(),state:r.state}}else{os_model::SlotPlugin { id: os_model::Id::NONE, name:os_flp::wrapper::WRAPPER.into(),state:os_flp::wrapper::encode(None,&r)}};mixer::track_mut(&mut app.state,t).ok_or("The destination mixer channel no longer exists.")?.slots[k as usize]=Some(p);bind(&mut app.state,t,k);}
     app.transport.set_effects(app.plugins.effects());app.params_tick();mixer::set_layout(&mut app.state,VIEW);
     Ok(format!("{} loaded on {} independent channel(s).",desc.name,dest.len()))
 }
@@ -288,8 +288,8 @@ mod tests {
         run(&mut app,Command::Remove(1));assert!(slot(&app.state,1).is_none());assert_eq!(app.state.project.mixer[1].strip_bypassed,native.strip_bypassed);assert_eq!(app.state.project.mixer[1].slot_on[10],native.slot_on[10]);crate::history::undo(&mut app.state);assert_eq!(slot(&app.state,1),Some(0));
     }
     #[test]fn rack_mixer_batch_capacity_extra_slots_and_legacy_retirement(){
-        let (mut app,index)=setup();for k in 0..64{app.state.project.mixer[2].slots[k]=Some(os_model::SlotPlugin{name:"Keep".into(),state:vec![7]});}let old=app.state.project.clone();assert!(run(&mut app,Command::Choose(1,index,true)).unwrap().contains("No channels changed"));assert_eq!(app.state.project,old);
-        for k in 0..10{app.state.project.mixer[1].slots[k]=Some(os_model::SlotPlugin{name:"Keep".into(),state:vec![7]});}run(&mut app,Command::Choose(1,index,false));assert_eq!(slot(&app.state,1),Some(11));let mut file=os_flp::project::create(&app.state.project).unwrap();assert_eq!(os_flp::project::load(&file).unwrap().mixer[1].rack_strip.as_ref().unwrap().slot,11);
+        let (mut app,index)=setup();for k in 0..64{app.state.project.mixer[2].slots[k]=Some(os_model::SlotPlugin { id: os_model::Id::NONE, name:"Keep".into(),state:vec![7]});}let old=app.state.project.clone();assert!(run(&mut app,Command::Choose(1,index,true)).unwrap().contains("No channels changed"));assert_eq!(app.state.project,old);
+        for k in 0..10{app.state.project.mixer[1].slots[k]=Some(os_model::SlotPlugin { id: os_model::Id::NONE, name:"Keep".into(),state:vec![7]});}run(&mut app,Command::Choose(1,index,false));assert_eq!(slot(&app.state,1),Some(11));let mut file=os_flp::project::create(&app.state.project).unwrap();assert_eq!(os_flp::project::load(&file).unwrap().mixer[1].rack_strip.as_ref().unwrap().slot,11);
         file.chunks.retain(|c|c.tag!=os_flp::Tag(*b"LRCK"));let mut data=vec![1];data.extend(br#"[[1,{"slot":11,"native_bypassed":false,"eq_on":true}]]"#);file.chunks.push(os_flp::Chunk{tag:os_flp::Tag(*b"LHST"),body:os_flp::ChunkBody::Raw(data)});let back=os_flp::project::load(&file).unwrap();assert!(back.mixer[1].rack_strip.is_none());assert!(!back.mixer[1].strip_bypassed);assert!(back.mixer[1].slot_on[10]);assert!(!back.mixer[1].slot_on[11]);
     }
 }

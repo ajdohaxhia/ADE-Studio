@@ -1,4 +1,4 @@
-// ML Studio adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
+// AQUILA adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
 // Gridline — the plugin's editor on Windows (PH-09): a child window of the host's window
 // with a WGL (OpenGL) context. Every view of the process shares GL objects with a hidden root
 // context. The view redraws on its own window timer (Windows hosts have no editor timer API);

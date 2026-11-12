@@ -1091,12 +1091,16 @@ fn keys_in_frame(window: &NSWindow) -> bool {
     crate::strip_editor::contains_editor(&v) || FRAMES.with(|fr| fr.borrow().iter().filter_map(Weak::upgrade).any(|f| v.isDescendantOf(&f.view)))
 }
 
+/// True for a key meant for a plugin's editor.
 fn monitor(e: &NSEvent) -> bool {
     let Some(window) = MainThreadMarker::new().and_then(|mtm| e.window(mtm)) else { return false };
     let t = e.r#type();
     if t == NSEventType::KeyDown || t == NSEventType::KeyUp {
         if !keys_in_frame(&window) {
             return false;
+        }
+        if t == NSEventType::KeyDown && e.isARepeat() {
+            return true;
         }
         let flags = e.modifierFlags();
         let k = KeyMsg {
@@ -1106,8 +1110,9 @@ fn monitor(e: &NSEvent) -> bool {
             ctrl: flags.intersects(NSEventModifierFlags::Control | NSEventModifierFlags::Command),
             alt: flags.contains(NSEventModifierFlags::Option),
         };
-        if t!=NSEventType::KeyDown || !e.isARepeat(){KEYS.with(|q| q.borrow_mut().push(k));os_clap::wake();}
-        return k.undo;
+        KEYS.with(|q| q.borrow_mut().push(k));
+        os_clap::wake();
+        return true;
     }
     if let Some(f) = frame_at(&window, e.locationInWindow()) {
         f.clicked();
@@ -1122,7 +1127,11 @@ pub fn install_monitor(_mtm: MainThreadMarker) {
     }
     let mask = NSEventMask::KeyDown | NSEventMask::KeyUp | NSEventMask::LeftMouseDown | NSEventMask::RightMouseDown | NSEventMask::OtherMouseDown;
     let block = RcBlock::new(|e: NonNull<NSEvent>| -> *mut NSEvent {
-        if monitor(unsafe { e.as_ref() }){std::ptr::null_mut()}else{e.as_ptr()}
+        // With the editors' keyboard focus off (`editor_keys`), a key meant for an editor is taken away from it.
+        if monitor(unsafe { e.as_ref() }) && !super::editor_keys() {
+            return std::ptr::null_mut();
+        }
+        e.as_ptr()
     });
     let token = unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask, &block) };
     std::mem::forget(token);
@@ -1303,7 +1312,7 @@ mod tests {
     /// Off the main thread (where tests run) there are no plugin windows, and asking says so.
     #[test]
     fn frames_need_the_main_thread() {
-        let info = ChannelInfo { name: "Keys".into(), target: "Insert 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None };
+        let info = ChannelInfo { name: "Keys".into(), target: "Bus 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None, icon: None };
         if MainThreadMarker::new().is_none() {
             assert!(FrameWindow::new(0, info, (480.0, 270.0), 2.0, (0, 0), false).is_err());
             assert_eq!(screen_to_main(10, 10), None);

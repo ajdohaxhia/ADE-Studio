@@ -39,7 +39,7 @@ def windows(config,out,log):
     site=out/'lemon-studio';v=str(r.version());payload=out/'payload';payload.mkdir()
     for name in ('lemonstudio.exe','Lemon Studio Source.zip','LICENSE','THIRD-PARTY-NOTICES.txt'):shutil.copy2(site/'updates'/v/name,payload/name)
     shutil.copytree(cfg['runtime'],payload/'runtime');shutil.copy2(r.ROOT/'crates/os-app/assets/templates/Lemon Starter.flp',payload/'Lemon Starter.lmn')
-    (payload/'READ ME.txt').write_text('Lemon Studio — Michael Lane Edition\n'+r.BASE,encoding='utf-8')
+    (payload/'READ ME.txt').write_text('Lemon Studio — AQUILA\n'+r.BASE,encoding='utf-8')
     label=f'{v[:4]}.{v[4:6]}.{v[6:8]}.{int(v[8:])}'
     installer=site/'downloads'/v/f'Lemon-Studio-Windows-Setup-{label}.exe';installer.parent.mkdir(parents=True)
     command(log,cfg['nsis'],f'/DPAYLOAD={payload}',f'/DOUTPUT={installer}',r.ROOT/'packaging/windows/LemonStudio.nsi',env=env)

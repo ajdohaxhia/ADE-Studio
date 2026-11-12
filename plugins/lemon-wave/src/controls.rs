@@ -1797,6 +1797,8 @@ pub const SPEC: &Spec = &Spec {
     parse,
     sound: unused_sound,
     rings: true,
+    blank: None,
+    locate: None,
 };
 fn unused_sound(_: u32, _: &[i32]) -> Box<dyn Sound> {
     unreachable!("Wave owns its instrument engine")

@@ -35,7 +35,7 @@ const PRODUCT: &str = "lemon-studio-michael-lane-mac-x86_64";
 const EXE: &str = if cfg!(windows) {"lemonstudio.exe"} else {"lemonstudio"};
 const MAC_FILES: &[&str] = &["Contents/MacOS/lemonstudio","Contents/Info.plist","Contents/PkgInfo","Contents/Resources/Assets.car","Contents/Resources/lemonstudio.icns","Contents/_CodeSignature/CodeResources"];
 fn expected_files() -> Vec<&'static str> {
-    if cfg!(target_os="macos") {MAC_FILES.to_vec()} else {vec![EXE,"Lemon Studio Source.zip","THIRD-PARTY-NOTICES.txt","LICENSE"]}
+    if cfg!(target_os="macos") {MAC_FILES.to_vec()} else {vec![EXE,"AQUILA Source.zip","THIRD-PARTY-NOTICES.txt","LICENSE"]}
 }
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -87,7 +87,7 @@ fn checked_file(path: &Path, file: &File) -> Result<()> {
 }
 fn cache() -> Result<PathBuf> {
     #[cfg(windows)]
-    let dir=PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or("No local application folder")?).join("Lemon Studio").join("Updates");
+    let dir=PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or("No local application folder")?).join("AQUILA").join("Updates");
     #[cfg(not(windows))]
     let dir=os_paths::user_dir().ok_or("No user application folder")?.join("Updates"); fs::create_dir_all(&dir)?; Ok(dir)
 }
@@ -98,11 +98,11 @@ fn get(url: &str, max: u64) -> Result<Vec<u8>> {
 }
 #[cfg(target_os="macos")]
 fn writable_bundle(exe:&Path) -> Result<()> {
-    let bundle=exe.parent().and_then(Path::parent).and_then(Path::parent).ok_or("Run ML Studio from Applications")?;
-    if bundle.extension().and_then(|s|s.to_str())!=Some("app") {return Err("Run the installed ML Studio app from Applications to update".into());}
+    let bundle=exe.parent().and_then(Path::parent).and_then(Path::parent).ok_or("Run AQUILA from Applications")?;
+    if bundle.extension().and_then(|s|s.to_str())!=Some("app") {return Err("Run the installed AQUILA app from Applications to update".into());}
     let parent=bundle.parent().ok_or("No Applications folder")?;
     let probe=parent.join(format!(".lemon-write-check-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos()));
-    let file=fs::OpenOptions::new().write(true).create_new(true).open(&probe).map_err(|_|"Move ML Studio out of the DMG into a writable Applications folder, reopen it there, then retry Update")?;
+    let file=fs::OpenOptions::new().write(true).create_new(true).open(&probe).map_err(|_|"Move AQUILA out of the DMG into a writable Applications folder, reopen it there, then retry Update")?;
     drop(file);fs::remove_file(probe)?;Ok(())
 }
 fn check() -> Result<Option<PathBuf>> {
@@ -143,8 +143,8 @@ pub fn request() {
     std::thread::spawn(|| {
         let result=check(); let mut s=status().lock().unwrap(); s.busy=false;
         match result {
-            Ok(Some(dir)) => {s.ready=Some(dir);s.message="Update ready. Click to restart, or it will install when you close ML Studio.".into();}
-            Ok(None) => s.message="ML Studio is up to date.".into(),
+            Ok(Some(dir)) => {s.ready=Some(dir);s.message="Update ready. Click to restart, or it will install when you close AQUILA.".into();}
+            Ok(None) => s.message="AQUILA is up to date.".into(),
             Err(e) => s.message=format!("Update check failed: {e}. Click Update to retry."),
         }
     });
@@ -167,7 +167,7 @@ pub fn take_result() -> Option<String> {
     let message=fs::read_to_string(&file).ok()?;
     let _=fs::remove_file(file);
     #[cfg(windows)]
-    if message.starts_with("ML Studio updated to ") {
+    if message.starts_with("AQUILA updated to ") {
         use std::os::windows::ffi::OsStrExt;
         use windows_sys::Win32::UI::Shell::{SHChangeNotify, SHCNE_UPDATEITEM, SHCNF_PATHW};
         if let Ok(exe) = std::env::current_exe() {
@@ -247,14 +247,14 @@ fn install(stage:&Path,target:&Path,manifest:&Manifest)->Result<()> {
 fn install_bundle(stage:&Path,target:&Path,manifest:&Manifest)->Result<()> {
     let bundle=target.parent().and_then(Path::parent).and_then(Path::parent).ok_or("Not an installed app bundle")?;
     if bundle.extension().and_then(|x|x.to_str())!=Some("app") || target!=bundle.join("Contents/MacOS/lemonstudio") {
-        return Err("Run the installed ML Studio app to update it".into());
+        return Err("Run the installed AQUILA app to update it".into());
     }
     if fs::symlink_metadata(bundle)?.file_type().is_symlink() {return Err("App bundle cannot be a symbolic link".into());}
     let parent=bundle.parent().ok_or("No app installation folder")?;
     let stamp=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos();
     let next=parent.join(format!(".lemon-update-{stamp}.app"));
     let backup=parent.join(format!(".lemon-backup-{}-{stamp}.app",manifest.version));
-    fs::create_dir(&next).map_err(|e|format!("Cannot update this location ({e}). Move ML Studio to a writable Applications folder first."))?;
+    fs::create_dir(&next).map_err(|e|format!("Cannot update this location ({e}). Move AQUILA to a writable Applications folder first."))?;
     for file in &manifest.files {
         if !MAC_FILES.contains(&file.name.as_str()) {return Err("Unexpected bundle file".into());}
         checked_file(&stage.join(&file.name),file)?;
@@ -279,7 +279,7 @@ fn wait_parent(pid:u32,stage:&Path)->Result<()> {
     if !alive()? {return Err("Closing process no longer exists".into());}
     fs::write(stage.join("helper-ready"),b"ready")?;
     let until=Instant::now()+Duration::from_secs(120);
-    while alive()? {if Instant::now()>=until {return Err("ML Studio is still running; update deferred".into());}std::thread::sleep(Duration::from_millis(100));}
+    while alive()? {if Instant::now()>=until {return Err("AQUILA is still running; update deferred".into());}std::thread::sleep(Duration::from_millis(100));}
     Ok(())
 }
 
@@ -288,7 +288,7 @@ fn wait_parent(pid: u32, stage: &Path) -> Result<()> {
     use windows_sys::Win32::{Foundation::{CloseHandle,WAIT_OBJECT_0},System::Threading::{OpenProcess,WaitForSingleObject,PROCESS_SYNCHRONIZE}};
     unsafe {let handle=OpenProcess(PROCESS_SYNCHRONIZE,0,pid); if handle.is_null(){return Err("Cannot identify the closing process".into())}
         fs::write(stage.join("helper-ready"),b"ready")?;
-        let result=WaitForSingleObject(handle,120000);CloseHandle(handle);if result!=WAIT_OBJECT_0{return Err("ML Studio is still running; update deferred".into())}}
+        let result=WaitForSingleObject(handle,120000);CloseHandle(handle);if result!=WAIT_OBJECT_0{return Err("AQUILA is still running; update deferred".into())}}
     Ok(())
 }
 pub fn helper(args: &[String]) -> i32 {
@@ -302,7 +302,7 @@ pub fn helper(args: &[String]) -> i32 {
         install(&stage,&target,&manifest)?;
         let _=retention::run(&target,manifest.version,Some(&stage));
         fs::write(stage.join("result.txt"),format!("Installed {}",manifest.label))?;
-        report_result(&format!("ML Studio updated to {}.",manifest.label));
+        report_result(&format!("AQUILA updated to {}.",manifest.label));
         if args[3]=="restart" {let mut cmd=std::process::Command::new(&target);if let Some(p)=args.get(4){cmd.arg(p);}cmd.current_dir(target.parent().ok_or("No parent")?).spawn()?;}
         Ok(())
     })();
@@ -397,7 +397,7 @@ mod tests {
     fn mac_signed_bundle_update_transaction() {
         let input=PathBuf::from(std::env::var_os("LEMON_UPDATE_TEST_BUNDLE").expect("signed bundle"));
         let root=std::env::temp_dir().join(format!("lemon-mac-update-{}",std::process::id()));
-        let stage=root.join("stage");let app=root.join("Lemon Studio.app");
+        let stage=root.join("stage");let app=root.join("AQUILA.app");
         fs::create_dir_all(&stage).unwrap();fs::create_dir_all(&app).unwrap();
         let files=MAC_FILES.iter().map(|name|{
             for dir in [&stage,&app] {let dest=dir.join(name);fs::create_dir_all(dest.parent().unwrap()).unwrap();fs::copy(input.join(name),dest).unwrap();}
@@ -428,7 +428,7 @@ mod tests {
         let key=SigningKey::from_bytes(&[19;32]);
         let root=std::env::temp_dir().join(format!("lemon-update-test-{}",std::process::id()));
         let stage=root.join("stage");let app=root.join("app"); fs::create_dir_all(&stage).unwrap();fs::create_dir_all(&app).unwrap();
-        let files:Vec<_>=[EXE,"Lemon Studio Source.zip","THIRD-PARTY-NOTICES.txt","LICENSE"].iter().map(|n| {
+        let files:Vec<_>=[EXE,"AQUILA Source.zip","THIRD-PARTY-NOTICES.txt","LICENSE"].iter().map(|n| {
             fs::write(stage.join(n),b"new payload").unwrap();fs::write(app.join(n),b"old payload").unwrap();
             File{name:n.to_string(),size:11,sha256:hex(&Sha256::digest(b"new payload"))}
         }).collect();

@@ -587,5 +587,5 @@ void MainComponent::drawBranding(juce::Graphics& g, juce::Rectangle<float> area)
     g.drawText("ASSISTANT  /  MASTERING SUITE", text.removeFromTop(24), juce::Justification::centredLeft);
     g.setColour(oxygen::Theme::Colors::OnSurfaceVariant);
     g.setFont(12.0f);
-    g.drawText("ML Studio / oXygen engine", text, juce::Justification::centredLeft);
+    g.drawText("AQUILA / oXygen engine", text, juce::Justification::centredLeft);
 }

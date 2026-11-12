@@ -36,10 +36,11 @@ pub const SETTINGS: [Setting; dsp::PARAMS] = [
     setting("wet", "Wet only", dsp::WET_ONLY),
 ];
 
-/// Editor layout (spec §2), as the original's: a grid of tiles, three across and four down.
+/// Editor layout (spec §2), as the original's: a grid of tiles, three across and four down. The page's spans end before
+/// their last number (158 x 46, 6 px apart); `Control::Tile` takes end-inclusive edges, so the last pixel is one less.
 const fn tile(id: &'static str, col: usize, row: usize, caption: &'static str) -> Control {
     let (x0, y0) = (8.0 + 164.0 * col as f32, 8.0 + 52.0 * row as f32);
-    Control::Tile { id, x0, y0, x1: x0 + 158.0, y1: y0 + 46.0, caption }
+    Control::Tile { id, x0, y0, x1: x0 + 158.0 - 1.0, y1: y0 + 46.0 - 1.0, caption }
 }
 
 /// The stored value of each wave's lowest setting, and the top for the last (the typed-in names).
@@ -63,12 +64,14 @@ const CONTROLS: [Control; 12] = [
 pub const SPEC: &Spec = &Spec {
     name: "ML Chorus",
     word: "CHORUS",
-    about: "ML Studio's chorus",
+    about: "AQUILA's chorus",
     settings: &SETTINGS,
     version: Some(dsp::VERSION),
     any_version: false,
     fields: &[],
     tail: &[],
+    blank: None,
+    locate: None,
     size: (502, 248),
     cards: &[],
     controls: &CONTROLS,
@@ -206,7 +209,7 @@ pub struct ChorusKind;
 impl Kind for ChorusKind {
     const SPEC: &'static Spec = SPEC;
     const CLAP_ID: &'static str = "org.openstudio.lemon-chorus";
-    const CLAP_DESCRIPTION: &'static str = "ML Studio's chorus";
+    const CLAP_DESCRIPTION: &'static str = "AQUILA's chorus";
     const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::AudioEffect, ClapFeature::Chorus, ClapFeature::Stereo];
     const VST3_CLASS_ID: [u8; 16] = *b"LemonStudioChrus";
     const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] = &[Vst3SubCategory::Fx, Vst3SubCategory::Modulation];

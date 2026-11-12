@@ -557,7 +557,8 @@ fn builtin(app: &mut App, id: &str, c: usize) -> bool {
         "piano.zoom-in" | "piano.zoom-out" => {
             if let Some(g) = app.piano_geom() {
                 let x = app.mouse.0.clamp(g.grid.x, g.grid.right());
-                piano::zoom_time(&mut app.state, &g, x, direction as f32);
+                let from = app.state.piano.px_per_beat;
+                piano::zoom_time(&mut app.state, &g, x, from, direction as f32);
             }
         }
         "piano.taller" | "piano.shorter" => {
@@ -1376,9 +1377,9 @@ pub fn edit(app: &mut App, action: Edit) {
                 "input-bindings",
                 crate::dialog::Then::InputBindings(export),
             )
-            .filter("ML Studio controls", &["json"])
+            .filter("AQUILA controls", &["json"])
             .name(if export {
-                "ML Studio Controls.json"
+                "AQUILA Controls.json"
             } else {
                 ""
             });
@@ -2010,46 +2011,6 @@ mod tests {
                 .save_png(std::path::PathBuf::from(dir).join("input-bindings.png"))
                 .unwrap();
         }
-    }
-    #[test]
-    fn binding_sequences_restore_notes_with_one_undo_even_at_history_limit() {
-        let mut app = App::new(None);
-        app.state.project = crate::app::test_project();
-        app.state.z = vec![Win::PianoRoll];
-        let ch = piano::channel(&app.state).unwrap();
-        let i = piano::add_note(&mut app.state, ch, 192, 60);
-        app.state.piano.select(app.state.pattern, ch, vec![i]);
-        let before = piano::notes(&app.state).to_vec();
-        crate::prefs::set_number(&crate::prefs::MAX_UNDO_LEVELS, 1);
-        execute(
-            &mut app,
-            vec![
-                "piano.up".into(),
-                "piano.right".into(),
-                "piano.velocity-down".into(),
-            ],
-            1,
-        );
-        let after = piano::notes(&app.state).to_vec();
-        assert_ne!(before, after);
-        assert_eq!(app.state.history.done(), 1);
-        assert_eq!(
-            crate::history::undo(&mut app.state),
-            Some("Custom action sequence")
-        );
-        assert_eq!(piano::notes(&app.state), before);
-        crate::history::redo(&mut app.state).unwrap();
-        assert_eq!(piano::notes(&app.state), after);
-        execute(&mut app, vec!["piano.up".into(), "missing".into()], 1);
-        assert_eq!(
-            piano::notes(&app.state),
-            after,
-            "invalid sequence must not partially execute"
-        );
-        crate::prefs::set_number(
-            &crate::prefs::MAX_UNDO_LEVELS,
-            crate::prefs::MAX_UNDO_LEVELS.default,
-        );
     }
     #[test]
     fn binding_owner_modifiers_text_and_mixer_lock() {

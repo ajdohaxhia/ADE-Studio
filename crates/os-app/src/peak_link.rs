@@ -47,8 +47,8 @@ pub fn remap_target(t:u32,m:&dyn Fn(u16)->u16)->u32{
  MixerEq(n,b,k)=>t::mixer(m(n),[t::EQ_GAIN,t::EQ_FREQ,t::EQ_WIDTH][k as usize]+b),MixerStrip(n,k)=>t::strip(m(n),k),MixerSend(n,d)=>t::send(m(n),m(d)),SlotOn(n,k)=>t::slot(m(n),k,t::SLOT_ON),SlotMix(n,k)=>t::slot(m(n),k,t::SLOT_MIX),SlotParam(n,k,p)=>t::slot_param(m(n),k,p),_=>t}
 }
 
-pub fn restore_removed(s:&State,next:&[os_model::PeakLink]){
- for l in &s.project.peak_links {if !next.iter().any(|n|n.target==l.target){if let Some((key,index))=crate::params::key_of(s,os_model::target::decode(l.target)){crate::params::set_param_value(s,key,index,l.base as f64);}}}
+pub fn restore_removed(s:&mut State,next:&[os_model::PeakLink]){
+ for l in s.project.peak_links.clone().iter() {if !next.iter().any(|n|n.target==l.target){if let Some((key,index))=crate::params::key_of(s,os_model::target::decode(l.target)){crate::params::set_param_value(s,key,index,l.base as f64);}}}
 }
 pub fn remove_slot(s:&mut State,track:u16,slot:u8){s.project.peak_links.retain(|l|!matches!(os_model::target::decode(l.target),os_model::target::Target::SlotParam(t,k,_) if t==track&&k==slot));}
 

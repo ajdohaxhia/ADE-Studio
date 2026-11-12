@@ -25,10 +25,11 @@ pub const SETTINGS: [Setting; dsp::PARAMS] = [
 ];
 
 /// Editor layout (spec §2), as the original's: the knobs and the type switch in a row over the wordmark, the curve at
-/// the right.
+/// the right. The page's ranges end before their last number (6 px apart, 8 px from the edges); a card's `x1` and `y1`
+/// are its last pixels.
 const CARDS: [Card; 2] = [
-    Card { x0: 8.0, x1: 312.0, y0: 28.0, y1: 116.0, heading: "DISTORTION" },
-    Card { x0: 318.0, x1: 468.0, y0: 28.0, y1: 146.0, heading: "CURVE" },
+    Card { x0: 8.0, x1: 311.0, y0: 28.0, y1: 115.0, heading: "DISTORTION" },
+    Card { x0: 318.0, x1: 467.0, y0: 28.0, y1: 145.0, heading: "CURVE" },
 ];
 
 const CONTROLS: [Control; 5] = [
@@ -42,12 +43,14 @@ const CONTROLS: [Control; 5] = [
 pub const SPEC: &Spec = &Spec {
     name: "ML Fast Distortion",
     word: "FAST DISTORTION",
-    about: "ML Studio's fast distortion",
+    about: "AQUILA's fast distortion",
     settings: &SETTINGS,
     version: None,
     any_version: false,
     fields: &[],
     tail: &[],
+    blank: None,
+    locate: None,
     size: (476, 154),
     cards: &CARDS,
     controls: &CONTROLS,
@@ -128,7 +131,7 @@ pub struct FastDistortionKind;
 impl Kind for FastDistortionKind {
     const SPEC: &'static Spec = SPEC;
     const CLAP_ID: &'static str = "org.openstudio.lemon-fast-distortion";
-    const CLAP_DESCRIPTION: &'static str = "ML Studio's fast distortion";
+    const CLAP_DESCRIPTION: &'static str = "AQUILA's fast distortion";
     const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::AudioEffect, ClapFeature::Distortion, ClapFeature::Stereo];
     const VST3_CLASS_ID: [u8; 16] = *b"LemonStudioFDist";
     const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] = &[Vst3SubCategory::Fx, Vst3SubCategory::Distortion];

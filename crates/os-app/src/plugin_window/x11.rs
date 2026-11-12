@@ -55,6 +55,8 @@ x11rb::atom_manager! {
         _NET_WM_STATE_ABOVE,
         _NET_WORKAREA,
         _NET_CURRENT_DESKTOP,
+        _NET_WM_WINDOW_TYPE,
+        _NET_WM_WINDOW_TYPE_DIALOG,
         _MOTIF_WM_HINTS,
     }
 }
@@ -170,6 +172,10 @@ struct Frame {
     dirty: Cell<bool>,
     /// The last left press (server time, position) for double clicks.
     last_press: Cell<Option<(u32, i16, i16)>>,
+    /// Hyprland took its border off (`hyprland::plain`) since it was last mapped.
+    plain: Cell<bool>,
+    /// A title-bar drag Hyprland carries out (`hyprland::Drag`).
+    hypr_drag: RefCell<Option<super::hyprland::Drag>>,
 }
 
 /// A plugin window. Dropping it destroys the native window (close the plugin's editor first).
@@ -203,8 +209,8 @@ impl FrameWindow {
         let docked = owner != 0 && !detached;
         let mut state = State::new(info, editor, !docked);
         state.can_attach = owner != 0;
-        let (parent, at) = if docked { (owner, from_root(&conn, owner, pos)) } else { (conn.root, (0, 0)) };
         let (w, h) = state.size();
+        let (parent, at) = if docked { (owner, from_root(&conn, owner, pos)) } else { (conn.root, centred(&conn, (px(w, k), px(h, k)))) };
         let ay = state.area_y();
         let title = state.info.name.clone();
         let c = &conn.c;
@@ -249,12 +255,16 @@ impl FrameWindow {
             if owner != 0 {
                 c.change_property32(PropMode::REPLACE, win, AtomEnum::WM_TRANSIENT_FOR, AtomEnum::WINDOW, &[owner as u32])?;
             }
+            // A dialog: tiling window managers float it, resizable or not (with a Wayland main window it has no owner to
+            // be transient for, and once resizable its size no longer marks it as fixed).
+            c.change_property32(PropMode::REPLACE, win, a._NET_WM_WINDOW_TYPE, AtomEnum::ATOM, &[a._NET_WM_WINDOW_TYPE_DIALOG])?;
             // Opened from the active application: it starts above (taken when the window is mapped). Under X11 the main
             // window owns it instead (transient for it).
             if !docked && conn.above.get() {
                 c.change_property32(PropMode::REPLACE, win, a._NET_WM_STATE, AtomEnum::ATOM, &[a._NET_WM_STATE_ABOVE])?;
             }
-            fixed_size(c, win, px(w, k), px(h, k))?;
+            // A detached frame tells the window manager where it opens (`centred`).
+            size_hints(c, win, px(w, k), px(h, k), (!docked).then_some(at))?;
             // Clicks in the plugin's editor come here first (then go on to it, `pump`): they bring the window to the
             // front of the app's windows, as clicks on the frame do.
             for b in [xproto::ButtonIndex::M1, xproto::ButtonIndex::M2, xproto::ButtonIndex::M3] {
@@ -293,6 +303,8 @@ impl FrameWindow {
             scale: k,
             dirty: Cell::new(true),
             last_press: Cell::new(None),
+            plain: Cell::new(false),
+            hypr_drag: RefCell::new(None),
         });
         conn.frames.borrow_mut().insert(win, Rc::downgrade(&f));
         Ok(FrameWindow { f })
@@ -318,6 +330,7 @@ impl FrameWindow {
         let (c, root) = (&f.conn.c, f.conn.root);
         let screen = f.to_screen(0.0, 0.0);
         let _ = c.unmap_window(f.win);
+        f.plain.set(false);
         let _ = shape_reset(c, f.win);
         if on {
             expose();
@@ -391,6 +404,9 @@ impl FrameWindow {
     pub fn raise(&self) {
         let (c, a, win) = (&self.f.conn.c, &self.f.conn.atoms, self.f.win);
         let _ = c.map_window(win);
+        if self.detached() && !self.f.plain.replace(true) {
+            super::hyprland::plain();
+        }
         let _ = c.configure_window(win, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE));
         if !self.detached() {
             self.f.dirty.set(true);
@@ -724,6 +740,13 @@ impl Frame {
                 self.state.borrow_mut().moving = Some((i32::from(root.0), i32::from(root.1), x, y));
                 self.dirty.set(true);
             }
+            Reply::Move if super::hyprland::running() => {
+                // Hyprland ignores the request below: it moves the frame on our asking, in its own coordinates, as the
+                // pointer goes (the press's grab brings the motion here).
+                *self.hypr_drag.borrow_mut() = super::hyprland::Drag::start();
+                let (x, y) = self.top_left();
+                self.state.borrow_mut().moving = Some((i32::from(root.0), i32::from(root.1), x, y));
+            }
             Reply::Move => {
                 // The window manager moves it (it needs the pointer the press grabbed).
                 let _ = c.ungrab_pointer(x11rb::CURRENT_TIME);
@@ -788,13 +811,20 @@ impl Frame {
                 self.reply(r, (e.root_x, e.root_y));
             }
             Event::ButtonRelease(e) if e.detail == 1 => {
+                if let Some(mut d) = self.hypr_drag.borrow_mut().take() {
+                    d.follow(true);
+                }
                 let r = self.state.borrow_mut().left_up(f32::from(e.event_x) / k, f32::from(e.event_y) / k);
                 self.reply(r, (e.root_x, e.root_y));
             }
             Event::MotionNotify(e) if self.state.borrow().moving.is_some() => {
                 let Some((cx, cy, wx, wy)) = self.state.borrow().moving else { return };
                 let at = (wx + i32::from(e.root_x) - cx, wy + i32::from(e.root_y) - cy);
-                if at != self.pos.get() {
+                if self.state.borrow().detached {
+                    if let Some(d) = self.hypr_drag.borrow_mut().as_mut() {
+                        d.follow(false);
+                    }
+                } else if at != self.pos.get() {
                     self.pos.set(at);
                     let _ = self.conn.c.configure_window(self.win, &ConfigureWindowAux::new().x(at.0).y(at.1));
                     // Re-clip at once for the new place; what the move uncovered is shown by the next present.
@@ -978,6 +1008,15 @@ fn work_area(conn: &Conn, p: (i32, i32)) -> Option<[i32; 4]> {
     Some(if r[0] < r[2] && r[1] < r[3] { r } else { mon })
 }
 
+/// Where a detached frame of `size` (physical px) opens: centred in the work area of the monitor under the pointer. A
+/// window that asks for no place lands at 0, 0 under some window managers (Hyprland keeps it there, under its bar and
+/// past the screen's edge).
+fn centred(conn: &Conn, size: (u16, u16)) -> (i32, i32) {
+    let p = conn.c.query_pointer(conn.root).ok().and_then(|r| r.reply().ok()).map_or((0, 0), |r| (i32::from(r.root_x), i32::from(r.root_y)));
+    let Some([l, t, r, b]) = work_area(conn, p) else { return (0, 0) };
+    (l + ((r - l) - i32::from(size.0)).max(0) / 2, t + ((b - t) - i32::from(size.1)).max(0) / 2)
+}
+
 /// A screen point (physical px) in `win`'s coordinates.
 fn from_root(conn: &Conn, win: xproto::Window, (x, y): (i32, i32)) -> (i32, i32) {
     let (x, y) = (x.clamp(-32768, 32767) as i16, y.clamp(-32768, 32767) as i16);
@@ -1017,6 +1056,25 @@ pub fn pointer_in_docked() -> bool {
     }
     let Some(r) = conn.c.query_pointer(owner).ok().and_then(|r| r.reply().ok()) else { return false };
     conn.frames.borrow().get(&r.child).and_then(Weak::upgrade).is_some_and(|f| !f.state.borrow().detached)
+}
+
+/// The keys down now, as the X server's keymap (a bit per X key code), while the main window is an X11 one. A key goes
+/// to the window under the pointer when that lies inside the focused window: over a docked editor its release reaches
+/// the editor, not the main window, so the typing keyboard asks here which of its keys are still down (issue #274).
+/// Under a native Wayland main window the X server does not see the keys it gets: None (UI thread).
+pub fn keys_down() -> Option<[u8; 32]> {
+    let conn = CONN.with(|c| c.borrow().clone())?;
+    if conn.owner.get() == 0 {
+        return None;
+    }
+    Some(conn.c.query_keymap().ok()?.reply().ok()?.keys)
+}
+
+/// Whether `code` is down in `keymap` (`keys_down`): the X key code is the evdev scancode winit reads, plus 8.
+pub fn in_keymap(keymap: &[u8; 32], code: winit::keyboard::KeyCode) -> bool {
+    use winit::platform::scancode::PhysicalKeyExtScancode;
+    let Some(k) = code.to_scancode().map(|s| s as usize + 8) else { return false };
+    keymap.get(k / 8).is_some_and(|&b| b >> (k % 8) & 1 != 0)
 }
 
 /// The window an event is about.
@@ -1152,6 +1210,21 @@ pub fn stack(parent: isize, hwnds: &[isize]) {
         let _ = conn.c.configure_window(h as xproto::Window, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE));
     }
     let _ = conn.c.flush();
+}
+
+/// Makes X11 window `win` (a detached Mixer or Channel rack, `detached_win`; not shown yet) transient for the main
+/// window `owner`, as the plugin frames are: the window manager keeps it above the main window, out of the task list,
+/// and minimizes it with it. The round trip makes sure the server has the property before the window is shown over
+/// winit's own connection.
+pub fn set_transient(win: u32, owner: isize) {
+    let Ok(conn) = conn() else { return };
+    if win == 0 || owner == 0 {
+        return;
+    }
+    let c = &conn.c;
+    if c.change_property32(PropMode::REPLACE, win, AtomEnum::WM_TRANSIENT_FOR, AtomEnum::WINDOW, &[owner as u32]).is_ok() {
+        let _ = c.get_input_focus().ok().and_then(|r| r.reply().ok());
+    }
 }
 
 /// Gives the keyboard back to the main window when a plugin editor holds it, or nobody does. A plugin takes it with a

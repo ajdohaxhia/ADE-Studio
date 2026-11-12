@@ -3,15 +3,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Plugin menus and destinations for the visual picker, channel rack's "+",
-//! Add one ▸ / Insert ▸ and the mixer slots open the app's own popup listing the installed plugins, and a pick adds
-//! the plugin where that menu says.
+//! Plugin menus (the full-screen plugin picker is retired): Add one ▸, Insert ▸, Replace ▸ and the other submenus list
+//! the installed plugins in the app's own popup, and a pick adds the plugin where that menu says. What opened a plugin
+//! menu on its own (F8, the toolbar's plugin button, the channel rack's "+", an empty mixer slot) opens the plugin
+//! palette (`crate::plugin_palette`), which lists the same plugins and picks the same way.
 // spec: ui/plugin-menu.md
 
 use std::collections::BTreeMap;
 
 use crate::app::{App, State};
-use crate::playlist::{Cmd, Mark, PItem, Popup};
+use crate::playlist::{Cmd, Mark, PItem};
 use crate::plugin_db::{self as db, Entry, MenuView, Mode};
 
 /// What a plugin menu entry does (`Cmd::Plugin`).
@@ -49,9 +50,29 @@ pub enum Target {
     ClipFx(u16,u8),
     /// Effects into the selected track: slot `k`, else its first empty slot.
     Fx(Option<u8>),
+    /// Effects added at the end of the container in the selected track's slot `k` (`crate::container`); for a
+    /// channel's container (`container::CHANNEL`), instruments and effects.
+    Container(u8),
+    /// Effects in place of member `.1` (its place in the list) of the container in the selected track's slot `.0`.
+    Member(u8, usize),
+    /// Instruments in place of instrument member `.1` of a channel's container.
+    MemberInst(u8, usize),
+    /// Generators for playlist track `.0`'s Track mode ▸ Instrument track ▸: a new channel, the track's instrument track
+    /// (spec: ui/playlist.md §6c).
+    Track(u16),
 }
 
-fn pick(target: Target, effect: bool, index: usize) -> Cmd {
+/// What picking plugin `index` (a generator, or an effect with `effect`) runs for `target`.
+pub(crate) fn pick(target: Target, effect: bool, index: usize) -> Cmd {
+    use crate::mixer::MCmd;
+    match target {
+        Target::Container(slot) if effect => return Cmd::Mixer(MCmd::MemberAdd(slot, index)),
+        Target::Container(slot) => return Cmd::Mixer(MCmd::MemberAddInst(slot, index)),
+        Target::Member(slot, i) => return Cmd::Mixer(MCmd::MemberReplace(slot, i, index)),
+        Target::MemberInst(slot, i) => return Cmd::Mixer(MCmd::MemberReplaceInst(slot, i, index)),
+        Target::Track(t) => return Cmd::TrackMode(t, crate::track_links::Mode::NewInstrument(index)),
+        _ => {}
+    }
     Cmd::Plugin(match (target, effect) {
         (Target::ClipFx(channel,slot),_)=>PlugCmd::ClipFx{channel,slot,index},
         (Target::Fx(slot), _) => PlugCmd::Effect { index, slot },
@@ -59,7 +80,7 @@ fn pick(target: Target, effect: bool, index: usize) -> Cmd {
         (Target::Gen(after), false) => PlugCmd::Generator { index, after },
         (Target::Stack(row),false)=>PlugCmd::Stack{index,row},
         (Target::Replace(row), false) => PlugCmd::Replace { index, row },
-        (Target::All, false) => PlugCmd::Generator { index, after: None },
+        (Target::All | Target::Container(_) | Target::Member(..) | Target::MemberInst(..) | Target::Track(_), false) => PlugCmd::Generator { index, after: None },
     })
 }
 
@@ -301,7 +322,7 @@ pub const VIEWS: &[(&str, MenuView)] = &[("Categories", MenuView::Categories), (
 fn footer(s: &State) -> Vec<PItem> {
     let view = s.plugdb.prefs.menu_view;
     let scanning = s.plugdb.progress.is_some();
-    let find = PItem::new(if scanning { "Find new plugins (scanning...)" } else { "Find new plugins" }, Cmd::Plugin(PlugCmd::Find));
+    let find = PItem::new(if scanning { "Scan for new plugins (scanning...)" } else { "Scan for new plugins" }, Cmd::Plugin(PlugCmd::Find));
     let mut v = vec![PItem::sep(), if scanning { find.off() } else { find }, PItem::new("Manage plugins...", Cmd::Plugin(PlugCmd::Manage)), PItem::sep()];
     v.push(PItem::sub("Organize plugin folders",vec![
         PItem::new("Effects",Cmd::Plugin(PlugCmd::OpenFolder(true))),
@@ -322,8 +343,16 @@ pub fn items(s: &State, target: Target, nested: bool) -> Vec<PItem> {
             v.push(PItem::head("Effects"));
             v.extend(section(s, true, target, nested));
         }
-        Target::Gen(_) | Target::Replace(_) | Target::Stack(_) => v.extend(section(s, false, target, nested)),
-        Target::Fx(_) | Target::ClipFx(..) => v.extend(section(s, true, target, nested)),
+        // A channel's container takes instruments and effects (spec: plugins/patcher/README.md §4.4).
+        Target::Container(crate::container::CHANNEL) => {
+            v.push(PItem::head("Instruments"));
+            v.extend(section(s, false, target, nested));
+            v.push(PItem::col());
+            v.push(PItem::head("Effects"));
+            v.extend(section(s, true, target, nested));
+        }
+        Target::Gen(_) | Target::Replace(_) | Target::Stack(_) | Target::MemberInst(..) | Target::Track(_) => v.extend(section(s, false, target, nested)),
+        Target::Fx(_) | Target::ClipFx(..) | Target::Container(_) | Target::Member(..) => v.extend(section(s, true, target, nested)),
     }
     v.extend(footer(s));
     if !cfg!(test) {
@@ -334,9 +363,15 @@ pub fn items(s: &State, target: Target, nested: bool) -> Vec<PItem> {
     v
 }
 
+/// The generators an instrument track can be made with (Track mode ▸ Instrument track ▸, spec: ui/playlist.md §6c): the
+/// plugin menu's generator list, picks making a new channel for playlist track `t`.
+pub fn track_generators(s: &State, t: u16) -> Vec<PItem> {
+    section(s, false, Target::Track(t), true)
+}
+
 /// A plugin menu for `target` at (x, y).
-pub fn menu(s: &State, target: Target, x: f32, y: f32) -> Popup {
-    Popup { x, y, items: items(s, target, false), sub: None, scroll: [0; 2], cascade: Vec::new() }
+pub fn menu(s: &State, target: Target, x: f32, y: f32) -> crate::playlist::Popup {
+    crate::playlist::Popup { x, y, items: items(s, target, false), sub: None, scroll: [0; 2], cascade: Vec::new() }
 }
 
 /// Whether the open popup is a plugin menu (F8 closes it).
@@ -399,17 +434,16 @@ pub fn run(app: &mut App, c: PlugCmd) -> Option<String> {
 
 /// A new channel for generator `index` (spec §1): at the bottom of the rack, or right below row `after`; selected and
 /// in view. Lemon Sampler makes an empty sampler channel (hosted on the next tick); any other generator a plugin
-/// channel hosting it. Its plugin window opens once it is hosted.
+/// channel hosting it. Its plugin window opens once it is hosted. One undo step, "Add channel" (`control::edit_app`):
+/// undone, the channel goes and its instance is kept; redone, it comes back with it (`control::host`).
 pub fn add_generator(app: &mut App, index: usize, after: Option<usize>) -> Option<String> {
+    crate::control::edit_app(app, crate::history::ADD_CHANNEL, crate::control::command::Region::Project, |app| add_generator_now(app, index, after))
+}
+
+pub(crate) fn add_generator_now(app: &mut App, index: usize, after: Option<usize>) -> Option<String> {
     let d = app.plugins.available.get(index)?.desc.clone();
     let s = &mut app.state;
     let sampler = d.name == crate::plugins::LEMON_SAMPLER && crate::project_plugins::is_builtin(&d);
-    // One step, at the bottom (`history::add_channel`) or inserted higher up (`history::insert_channel`).
-    let plugin = (!sampler).then_some(index);
-    match after.filter(|&r| r + 1 < s.project.channels.len()) {
-        Some(r) => crate::history::insert_channel(s, r + 1, plugin),
-        None => crate::history::add_channel(s, plugin),
-    }
     let mut ch = if sampler { crate::app::add_channel(&mut s.project) } else { crate::app::add_plugin_channel(&mut s.project, &d.name) };
     if sampler {
         s.pending_open = Some(ch);
@@ -437,20 +471,28 @@ pub fn add_generator(app: &mut App, index: usize, after: Option<usize>) -> Optio
 /// Generator `index` in place of rack row `row`'s (channel menu and plugin window menu > Replace ▸; FL: "the plugin list
 /// of Add one", spec ui/channel-rack.md §18). The channel keeps its row, notes and steps, mixer track, levels and
 /// Misc settings; its old instance goes, the new one starts from its defaults, and the channel takes the new
-/// plugin's name. Lemon Studio choice where FL was not measured: the name follows the plugin.
+/// plugin's name. Lemon Studio choice where FL was not measured: the name follows the plugin. One undo step, "Replace
+/// channel" (`control::edit_app`): the channel takes a new id, so its old instrument, kept by the old one's
+/// (`Plugins::keep`), comes back with an undo and the new one with a redo (`control::host`).
 pub fn replace_generator(app: &mut App, index: usize, row: usize) -> Option<String> {
+    crate::control::edit_app(app, crate::history::REPLACE_CHANNEL, crate::control::command::Region::Project, |app| replace_generator_now(app, index, row))
+}
+
+fn replace_generator_now(app: &mut App, index: usize, row: usize) -> Option<String> {
     let d = app.plugins.available.get(index)?.desc.clone();
     app.state.project.channels.get(row)?;
     let sampler = d.name == crate::plugins::LEMON_SAMPLER && crate::project_plugins::is_builtin(&d);
-    // One step, with the old instrument's state (`history::replace_channel`).
-    let old = app.plugin_copy(row);
-    crate::history::replace_channel(&mut app.state, row, old, (!sampler).then_some(index));
+    app.plugins.keep(row);
     app.plugins.drop_key(row);
     app.state.hosted_rows.retain(|&r| r != row);
     app.transport.set_instruments(app.plugins.instruments());
     let s = &mut app.state;
     let ch = &mut s.project.channels[row];
     ch.plugin_state = None;
+    // A new id at once, before the new instance is hosted and takes its channel's.
+    ch.id = os_model::Id::NONE;
+    s.control.settle(&mut s.project);
+    let ch = &mut s.project.channels[row];
     if sampler {
         ch.kind = os_model::ChannelKind::Sampler;
         ch.plugin = None;

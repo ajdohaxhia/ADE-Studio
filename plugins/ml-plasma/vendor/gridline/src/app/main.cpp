@@ -1,4 +1,4 @@
-// ML Studio adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
+// AQUILA adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
 // Gridline — application entry: SDL2 window + OpenGL 3 + Dear ImGui, audio
 // device, default layout, typing keyboard, file drops.
 #include "FreezeUi.h"

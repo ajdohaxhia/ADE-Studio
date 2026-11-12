@@ -51,7 +51,7 @@ fn remove_owned(root: &Path, parent: &Path, allowed: &[String]) -> Result<()> {
 }
 
 fn backups(parent: &Path, current: &Path, installed: u64, mac: bool) -> Result<usize> {
-    let allowed: Vec<String> = if mac { MAC_FILES.to_vec() } else { vec![EXE,"Lemon Studio Source.zip","THIRD-PARTY-NOTICES.txt","LICENSE"] }.into_iter().map(str::to_owned).collect();
+    let allowed: Vec<String> = if mac { MAC_FILES.to_vec() } else { vec![EXE,"AQUILA Source.zip","THIRD-PARTY-NOTICES.txt","LICENSE"] }.into_iter().map(str::to_owned).collect();
     let mut found = Vec::new();
     for e in fs::read_dir(parent)? {
         let e = e?; let p = e.path();
@@ -131,7 +131,7 @@ mod tests {
     }
     #[test]
     fn retention_mac_bundle_keeps_latest_two_without_touching_active() {
-        let root=folder("mac");let current=root.join("Lemon Studio.app");fs::create_dir(&current).unwrap();
+        let root=folder("mac");let current=root.join("AQUILA.app");fs::create_dir(&current).unwrap();
         for i in 1..=4 {let p=root.join(format!(".lemon-backup-202611090{i}-{i}.app"));fs::create_dir_all(p.join("Contents/MacOS")).unwrap();fs::write(p.join("Contents/MacOS/lemonstudio"),b"app").unwrap();}
         assert_eq!(backups(&root,&current,2026110904,true).unwrap(),2);assert!(current.exists());assert!(root.join(".lemon-backup-2026110904-4.app").exists());fs::remove_dir_all(root).unwrap();
     }

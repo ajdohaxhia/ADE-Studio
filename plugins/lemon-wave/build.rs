@@ -6,7 +6,7 @@ fn main() {
         .map(PathBuf::from)
         .or_else(|| {
             std::env::var_os("LOCALAPPDATA")
-                .map(|p| PathBuf::from(p).join("Lemon Studio/Lemon Wave/Included Library.lwpack"))
+                .map(|p| PathBuf::from(p).join("AQUILA/Lemon Wave/Included Library.lwpack"))
         });
     let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("included_library.rs");
     let text = if let Some(p) = path.filter(|p| p.is_file()) {

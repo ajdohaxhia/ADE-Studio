@@ -27,8 +27,14 @@ impl Art {
     }
 }
 
+const ART_LOCK: Art = Art::outline("M 6 11 L 18 11 C 18.552 11 19 11.448 19 12 L 19 20 C 19 20.552 18.552 21 18 21 L 6 21 C 5.448 21 5 20.552 5 20 L 5 12 C 5 11.448 5.448 11 6 11 Z M 8 11 L 8 7 C 8 4.791 9.791 3 12 3 C 14.209 3 16 4.791 16 7 L 16 11");
+
 pub fn artwork(icon: Icon, family: u8) -> &'static Art {
     let atlas = match icon {
+        Icon::Lock => {
+            static ART: [Art; 27] = [ART_LOCK; 27];
+            &ART
+        }
         Icon::Minimize => {
             static ART: [Art; 27] = [
             Art::outline("M 4 16 L 20 16"),

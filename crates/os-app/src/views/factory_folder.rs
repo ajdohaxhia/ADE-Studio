@@ -4,7 +4,7 @@
 
 //! Settings ▸ File ▸ FL Studio factory content folder, drawn as the User data folder group is laid out (Reset, the
 //! folder button and the path, spec: ui/settings.md "File"). What it does: `crate::factory_folder`.
-// spec: flp/sample-paths.md "For Lemon Studio"
+// spec: flp/sample-paths.md "For AQUILA"
 
 use os_ui::{Font, Rect};
 

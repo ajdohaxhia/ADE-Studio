@@ -102,13 +102,38 @@ fn files_under(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// The files of data folder `dir` the project does not use (`used`: the files it refers to): those in its Samples,
+/// What Save writes: AQUILA's own project file, an FLP with Lemon Studio's chunks (spec: flp/lemon-format.md).
+pub const EXT: &str = "lmn";
+
+/// Upstream Lemon Studio's name for the same format: opened as a project, never written.
+pub const LEMON_EXT: &str = "lemon";
+
+/// The project files Lemon Studio opens: its own, and the FLPs it migrates from (spec: flp/lemon-format.md).
+pub const PROJECT_EXTS: [&str; 3] = [EXT, LEMON_EXT, "flp"];
+
+/// Whether `p` is a project file by its extension (`.lmn`, `.lemon` or `.flp`).
+pub fn is_project(p: &Path) -> bool {
+    p.extension().is_some_and(|e| PROJECT_EXTS.iter().any(|x| e.eq_ignore_ascii_case(x)))
+}
+
+/// Whether `p` is an FLP: Save does not write over it but asks for a `.lemon` name (spec: flp/lemon-format.md
+/// "Opening and saving").
+pub fn is_flp(p: &Path) -> bool {
+    p.extension().is_some_and(|e| e.eq_ignore_ascii_case("flp"))
+}
+
+/// `p` with the project extension (`.lmn`).
+pub fn as_lemon(p: &Path) -> PathBuf {
+    p.with_extension(EXT)
+}
+
 /// Recorded and Rendered folders, project files never. Sorted by path.
 pub fn unused_files(dir: &Path, used: &[PathBuf]) -> Vec<PathBuf> {
     let mut found = Vec::new();
     for sub in SCANNED {
         files_under(&dir.join(sub), &mut found);
     }
-    found.retain(|f| !f.extension().is_some_and(|e| (e.eq_ignore_ascii_case("lmn") || e.eq_ignore_ascii_case("flp"))) && !used.iter().any(|u| same_file(f, u)));
+    found.retain(|f| !is_project(f) && !used.iter().any(|u| same_file(f, u)));
     found.sort();
     found
 }
@@ -117,7 +142,7 @@ pub fn unused_files(dir: &Path, used: &[PathBuf]) -> Vec<PathBuf> {
 /// unused files leaves it alone.
 pub fn shared_folder(dir: &Path, own: &Path) -> bool {
     std::fs::read_dir(dir).is_ok_and(|r| {
-        r.flatten().any(|e| e.path().extension().is_some_and(|x| (x.eq_ignore_ascii_case("lmn") || x.eq_ignore_ascii_case("flp"))) && e.path().is_file() && !same_file(&e.path(), own))
+        r.flatten().any(|e| is_project(&e.path()) && e.path().is_file() && !same_file(&e.path(), own))
     })
 }
 
@@ -133,7 +158,7 @@ impl App {
             Some(b) => self.ask_discard("reverting to the last backup", Next::Revert(b)),
             None => {
                 let file = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-                self.tell(Kind::Info, "Revert to last backup", spans(&["There is no backup of ", &file, "."]));
+                self.tell(Kind::Info, "Restore backup...", spans(&["There is no backup of ", &file, "."]));
             }
         }
     }
@@ -166,8 +191,8 @@ impl App {
         };
         let start = root.join(USER_CATEGORY);
         let _ = std::fs::create_dir_all(&start);
-        let name = format!("{}.lmn", crate::backup::project_name(self.state.path.as_deref()));
-        let dlg = FileDlg::new(Mode::Save, "Save as template", "template", Then::SaveTemplate).filter("ML Studio project", &["lmn"]).start(Some(&start)).name(&name);
+        let name = format!("{}.{EXT}", crate::backup::project_name(self.state.path.as_deref()));
+        let dlg = FileDlg::new(Mode::Save, "Save as template", "template", Then::SaveTemplate).filter("AQUILA project", &[EXT]).start(Some(&start)).name(&name);
         self.file_dialog(dlg);
     }
 
@@ -214,14 +239,14 @@ impl App {
         self.file_dialog(dlg);
     }
 
-    /// The place was picked (`root`): the project is saved as `<root>/<name>/<name>.flp`, named after the project, that
+    /// The place was picked (`root`): the project is saved as `<root>/<name>/<name>.lemon`, named after the project, that
     /// new folder its data folder (the used samples copied there while Copy used samples to the project folder is on). A
     /// project file already there is refused.
     pub(crate) fn new_folder_chosen(&mut self, root: PathBuf) {
         const TITLE: &str = "Save to new project folder";
         let name = crate::backup::project_name(self.state.path.as_deref());
         let dir = root.join(&name);
-        let file = dir.join(format!("{name}.lmn"));
+        let file = dir.join(format!("{name}.{EXT}"));
         if file.exists() {
             return self.tell(Kind::Warning, TITLE, spans(&["", &file.display().to_string(), " already exists. Nothing was saved."]));
         }
@@ -255,7 +280,7 @@ impl App {
     /// (`unused_files`) are listed in a Yes / No question; Yes deletes them, then saves. With none, it only saves. A
     /// data folder that holds other project files is not looked in.
     pub(crate) fn delete_unused_ask(&mut self) {
-        const TITLE: &str = "Delete unused files";
+        const TITLE: &str = "Clean up";
         let Some(path) = self.state.path.clone() else { return };
         let dir = crate::data_folder::folder(&self.state).filter(|d| d.is_dir());
         if let Some(d) = dir.as_ref().filter(|d| shared_folder(d, &path)) {
@@ -399,6 +424,14 @@ mod tests {
         app.pick_new_template("User/Slow");
         assert_eq!((app.state.tempo, app.state.path.clone()), (97.0, None), "an untitled project from the template");
         assert!(!app.unsaved());
+        // A template saved by the original (an FLP) is listed and opens too.
+        let fl = root.join("User").join("Old");
+        std::fs::create_dir_all(&fl).unwrap();
+        app.state.tempo = 88.0;
+        app.save_to(fl.join("Old.flp"));
+        assert!(template_items(&app.state)[0].children.iter().any(|r| r.label.as_ref() == "Old"));
+        app.pick_new_template("User/Old");
+        assert_eq!((app.state.tempo, app.state.path.clone()), (88.0, None), "an untitled project from the FLP template");
         app.pick_new_template("Empty");
         assert_eq!((app.state.tempo, app.state.path.clone()), (130.0, None), "the built-in project");
         crate::templates::TEST_DIR.with(|d| *d.borrow_mut() = None);
@@ -473,7 +506,7 @@ mod tests {
         use crate::views::menus::{active, item_at, DELETE_UNUSED_LABEL, TOOLS_MENU};
         let mut app = App::new(None);
         let row = |menu: usize, label: &str| (0..200).find_map(|i| item_at(menu, i).filter(|it| it.label == label)).unwrap();
-        let rows = [(0, "Revert to last backup"), (0, "Save to new project folder..."), (0, DELETE_UNUSED_LABEL), (TOOLS_MENU, DELETE_UNUSED_LABEL)];
+        let rows = [(0, "Restore backup..."), (0, "Save to new project folder..."), (0, DELETE_UNUSED_LABEL), (TOOLS_MENU, DELETE_UNUSED_LABEL)];
         for (m, l) in rows {
             assert!(!active(&app.state, m, row(m, l)), "{l}: never saved");
         }

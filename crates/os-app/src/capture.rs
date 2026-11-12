@@ -1,4 +1,5 @@
 // Copyright (C) 2026 ItsAlphaNeon
+// Copyright (C) 2026 Samrat Dutta
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
@@ -313,16 +314,23 @@ pub fn devices() -> Vec<(String, bool, u16)> {
 }
 
 /// The system's input devices and their channels (on Linux the sound server's, or ALSA's in exclusive mode, as the
-/// output).
+/// output): the one Settings > Audio records from (else the system's default) first, asked for on its own so that it
+/// is there even when the list leaves it out, then the others. A device that reports no format is listed with none.
 fn system_inputs() -> Vec<(String, bool, u16)> {
-    use cpal::traits::{DeviceTrait, HostTrait};
-    let host = crate::audio_cfg::host(&crate::audio_cfg::AudioCfg::current());
-    let Ok(list) = host.input_devices() else { return Vec::new() };
-    list.filter(crate::audio_cfg::listed).filter_map(|d| {
-        let c = d.default_input_config().ok()?;
-        Some((crate::audio_cfg::device_name(&d), false, c.channels()))
-    })
-    .collect()
+    use cpal::traits::HostTrait;
+    use crate::device::system_input::input_config;
+    let cfg = crate::audio_cfg::AudioCfg::current();
+    let channels = |d: &cpal::Device| input_config(d).inspect_err(|e| eprintln!("audio input {e}")).map_or(0, |c| c.channels());
+    let mut v: Vec<(String, bool, u16)> =
+        crate::audio_cfg::input_device(&cfg).map(|d| (crate::audio_cfg::device_name(&d), false, channels(&d))).into_iter().collect();
+    let host = crate::audio_cfg::host(&cfg);
+    for d in host.input_devices().into_iter().flatten().filter(crate::audio_cfg::listed) {
+        let name = crate::audio_cfg::device_name(&d);
+        if !v.iter().any(|(n, ..)| *n == name) {
+            v.push((name, false, channels(&d)));
+        }
+    }
+    v
 }
 
 /// A system input device's stream, recording while it is held.
@@ -345,11 +353,11 @@ impl Drop for InputStream {
 
 /// Opens system input device `name` in shared mode at its own rate, pushing into `capture`.
 pub fn open_input(name: &str) -> Result<InputStream, String> {
-    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    use cpal::traits::{HostTrait, StreamTrait};
     use cpal::SampleFormat;
     let host = crate::audio_cfg::host(&crate::audio_cfg::AudioCfg::current());
     let device = crate::audio_cfg::find(host.input_devices().map_err(|e| e.to_string())?, name).ok_or_else(|| format!("{name} is not there"))?;
-    let supported = device.default_input_config().map_err(|e| e.to_string())?;
+    let supported = crate::device::system_input::input_config(&device)?;
     let format = supported.sample_format();
     let config: cpal::StreamConfig = supported.into();
     let stream = match format {
@@ -411,8 +419,19 @@ pub struct Recorder {
 
 impl Recorder {
     /// Starts writing what the capture takes in into `file` (a WAV at `rate` once finished).
-    pub fn start(file: PathBuf, rate: u32) -> Result<Recorder, String> { Self::start_from(file, rate, capture()) }
-    pub fn start_from(mut file: PathBuf, rate: u32, source: &'static Capture) -> Result<Recorder, String> {
+    pub fn start(file: PathBuf, rate: u32) -> Result<Recorder, String> {
+        Recorder::start_from(file, rate, |out| capture().drain(out))
+    }
+
+    /// `start` from capture `source` (a mixer track's own input capture).
+    pub fn start_from_capture(file: PathBuf, rate: u32, source: &'static Capture) -> Result<Recorder, String> {
+        let mut r = Recorder::start_from(file, rate, move |out| source.drain(out))?;
+        r.source = source;
+        Ok(r)
+    }
+
+    /// Starts writing what `drain` hands over (stereo frames, appended to its argument) into `file`.
+    pub fn start_from(mut file: PathBuf, rate: u32, mut drain: impl FnMut(&mut Vec<f32>) + Send + 'static) -> Result<Recorder, String> {
         if let Some(d) = file.parent() {
             std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
         }
@@ -444,7 +463,7 @@ impl Recorder {
                 loop {
                     let last = s.load(Ordering::Acquire);
                     buf.clear();
-                    source.drain(&mut buf);
+                    drain(&mut buf);
                     for x in &buf {
                         w.write_all(&x.to_le_bytes()).map_err(|e| e.to_string())?;
                     }
@@ -463,7 +482,7 @@ impl Recorder {
                 Ok((file, n))
             })
             .map_err(|e| e.to_string())?;
-        Ok(Recorder { source, stop, head, rate, thread: Some(thread) })
+        Ok(Recorder { source: capture(), stop, head, rate, thread: Some(thread) })
     }
 
     /// The take starts at frame `head` of what came in (negative: that much silence first).

@@ -41,7 +41,7 @@ mod tests {
     /// The header's lines after its copyright lines, without their comment markers; `{spdx}` is the file's licence
     /// expression.
     const HEADER: [&str; 2] =
-        ["SPDX-License-Identifier: {spdx}", "This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio"];
+        ["SPDX-License-Identifier: {spdx}", "This file is part of AQUILA: https://github.com/ItsAlphaNeon/Lemon-Studio"];
 
     /// Lemon Studio's licence expression.
     const LICENCE: &str = "GPL-3.0-or-later";

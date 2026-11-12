@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use os_ui::{Font, Rect};
 use crate::app::{Action, App, Ui};
 
-const NAME: &str = "Lemon Studio Starter Pack";
+const NAME: &str = "AQUILA Starter Pack";
 const CREDITS: &str = include_str!("../assets/starter-pack/Credits.txt");
 const MANIFEST: &str = include_str!("../assets/starter-pack/catalog.json");
 #[derive(Debug, Deserialize)]
@@ -177,7 +177,7 @@ pub fn paint_empty(ui:&mut Ui,r:Rect) {
     wrapped(ui,"Drag samples or folders here",Rect::new(x+10.,y+90.,w-20.,40.));
     let s=status().lock().unwrap().clone();
     if s.busy {button(ui,Rect::new(x,y+146.,w,36.),"Cancel download","",2);}
-    else {button(ui,Rect::new(x,y+146.,w,52.),"Download","ML Studio Starter Pack",1);}
+    else {button(ui,Rect::new(x,y+146.,w,52.),"Download","AQUILA Starter Pack",1);}
     wrapped(ui,&format!("{} sounds / {:.0} MB / Free CC0",catalog().len(),total() as f64/1048576.),Rect::new(x,y+210.,w,35.));
     wrapped(ui,"Drums, loops, keys, mallets, vocals and effects.",Rect::new(x,y+248.,w,48.));
     if !s.message.is_empty() {

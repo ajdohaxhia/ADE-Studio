@@ -48,10 +48,26 @@ pub trait Instrument: Send {
         self.note_off(offset, key);
     }
     /// Starts an audio clip's voice as `note_start` does, named `voice` for `voice_gain` and `voice_choke` (two clips
-    /// of one channel overlap on the same key). Default: `note_start`.
-    fn voice_start(&mut self, offset: u32, key: u8, velocity: f32, start: f32, levels: NoteLevels, voice: u32) {
-        let _ = voice;
+    /// of one channel overlap on the same key). `end` (0..1 of the sample, 0 = none) is the clip's trimmed end, where
+    /// an instrument that [`voice_ends`](Self::voice_ends) ends the voice. Default: `note_start`.
+    fn voice_start(
+        &mut self,
+        offset: u32,
+        key: u8,
+        velocity: f32,
+        start: f32,
+        end: f32,
+        levels: NoteLevels,
+        voice: u32,
+    ) {
+        let _ = (voice, end);
         self.note_start(offset, key, velocity, start, levels);
+    }
+    /// True for an instrument that ends an audio clip's voice at the `end` `voice_start` gives it, through its declick
+    /// closing (spec: audio/audio-clips.md "What a clip plays"): the engine then chokes the voice only at the song's
+    /// end. Default false: the engine chokes it at the clip's end tick.
+    fn voice_ends(&self) -> bool {
+        false
     }
     /// True for an instrument that puts `voice_gain` on its voices one by one. Default false: the engine puts an audio
     /// clip's fades and gain on the instrument's whole output, which is right only while one clip plays at a time.
@@ -118,6 +134,18 @@ pub trait Instrument: Send {
     /// "Parameters"). Default false: values every few frames inside the tick (spec: plugins/plugin-parameters.md §2).
     fn tick_params(&self) -> bool {
         false
+    }
+    /// `tick_params` for parameter `index` alone: a channel's container's members each take theirs as their plugin does
+    /// (`crate::chain`).
+    fn tick_params_at(&self, index: u32) -> bool {
+        let _ = index;
+        self.tick_params()
+    }
+    /// The plain range (min, max) of parameter `index` as the plugin states it: what a pattern control point on the
+    /// parameter is read against (`os_model::target::plugin_point_level`). Default: unknown (such points do nothing).
+    fn param_range(&self, index: usize) -> Option<(f64, f64)> {
+        let _ = index;
+        None
     }
     /// The channel's levels for the next `process` call. An instrument that works the volume and pan into its voices
     /// itself returns true, and the engine then adds its output unchanged (FL native generators get them in their
@@ -230,19 +258,23 @@ impl ChannelVoicing {
 }
 
 /// A note's own levels besides its velocity and pitch (spec: audio/voice-levels.md "The note's own levels"): pan
-/// -1..1 (`(pan byte - 64) / 64`), mod X / mod Y -1..0.992 (`(byte - 128) / 128`). Default: centred, no offsets.
+/// -1..1 (`(pan byte - 64) / 64`), mod X / mod Y -1..0.992 (`(byte - 128) / 128`), and the MIDI channel it is played on.
+/// Default: centred, no offsets, MIDI channel 1.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct NoteLevels {
     pub drive:f32,
     pub pan: f32,
     pub mod_x: f32,
     pub mod_y: f32,
+    /// The MIDI channel, 0..15 (0 = channel 1): a MIDI device's own for a live note on a channel with MIDI channel
+    /// through ticked (spec: ui/channel-rack.md §18), else 0. A hosted plugin gets the note, and its end, on it.
+    pub channel: u8,
 }
 
 impl NoteLevels {
     /// The levels of a note's pan, mod X and mod Y bytes.
     pub fn of_bytes(pan: u8, mod_x: u8, mod_y: u8) -> NoteLevels {
-        NoteLevels { drive:0., pan: (f32::from(pan) - 64.0) / 64.0, mod_x: (f32::from(mod_x) - 128.0) / 128.0, mod_y: (f32::from(mod_y) - 128.0) / 128.0 }
+        NoteLevels { drive:0., pan: (f32::from(pan) - 64.0) / 64.0, mod_x: (f32::from(mod_x) - 128.0) / 128.0, mod_y: (f32::from(mod_y) - 128.0) / 128.0, channel: 0 }
     }
 }
 
@@ -385,6 +417,17 @@ pub trait HostedEffect: Send {
     fn tick_params_fx(&self) -> bool {
         false
     }
+    /// `tick_params_fx` for parameter `index` alone: a container's members each take theirs as their effect does
+    /// (`crate::chain`).
+    fn tick_params_at(&self, index: u32) -> bool {
+        let _ = index;
+        self.tick_params_fx()
+    }
+    /// [`Instrument::param_range`] for effects.
+    fn param_range_fx(&self, index: usize) -> Option<(f64, f64)> {
+        let _ = index;
+        None
+    }
     /// [`Instrument::transport`] for effects: the song position during the next `process_fx` call.
     fn transport_fx(&mut self, info: &TransportInfo) {
         let _ = info;
@@ -393,6 +436,12 @@ pub trait HostedEffect: Send {
     /// after `process_fx` (spec: audio/delay-compensation.md).
     fn reported_delay_fx(&self) -> u32 {
         0
+    }
+    /// A controller plugin's output `k` (0..1) as its last block left it, for the links that read it (spec:
+    /// plugins/lemon-peak-controller.md "Links"). `None`: no such output (yet).
+    fn control_fx(&self, k: usize) -> Option<f32> {
+        let _ = k;
+        None
     }
 }
 

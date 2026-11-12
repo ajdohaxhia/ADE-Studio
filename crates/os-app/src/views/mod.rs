@@ -8,6 +8,7 @@
 pub mod browser;
 pub mod cabledebug;
 pub mod channel_win;
+pub mod container;
 pub mod data_folder;
 pub mod factory_folder;
 pub mod dialog;
@@ -20,6 +21,7 @@ pub mod mixer;
 pub mod piano;
 pub mod patterns;
 pub mod perf;
+pub mod plugin_palette;
 pub mod playlist;
 pub mod project_forms;
 pub mod rack;
@@ -31,6 +33,7 @@ pub mod strum;
 pub mod piano_dlg;
 pub mod tapper;
 pub mod touch;
+pub mod events;
 pub mod theme_preview;
 pub mod toolbar;
 pub mod vintage_toolbar;
@@ -198,10 +201,10 @@ pub fn paint(ui: &mut Ui, s: &State, f: &FrameInfo) -> usize {
     if docked.is_none() && !crate::wallpaper::paint(ui, work) && crate::workspace_visibility::shown("visible_watermark") {
         let wm = ui.t.watermark;
         icons::logo(ui.c, work.cx(), work.cy() + 40.0, 170.0, wm);
-        let version = concat!("ML Studio v", env!("CARGO_PKG_VERSION"), " - pre-alpha");
+        let version = format!("AQUILA v{}", crate::version::staged());
         let vc = ui.t.version_text;
-        let vw = ui.c.text_width(crate::views::fnt(16.0), version);
-        ui.c.text(crate::views::fnt(16.0), work.cx() - vw / 2.0, h - 22.0, vc, version);
+        let vw = ui.c.text_width(crate::views::fnt(16.0), &version);
+        ui.c.text(crate::views::fnt(16.0), work.cx() - vw / 2.0, h - 22.0, vc, &version);
     }
 
     // One stacking order for all child windows (spec: ui/channel-rack.md §5). A maximized window
@@ -214,8 +217,9 @@ pub fn paint(ui: &mut Ui, s: &State, f: &FrameInfo) -> usize {
     }
     let _ = work;
     for (i, &win) in s.z.iter().enumerate() {
+        // A detached window paints in its own native window (`paint_detached`).
         if s.native_view.map_or(s.native_detached.contains(&win),|v|v!=win) {continue;}
-        if s.native_view.is_none() && docked_at.is_some_and(|d| i < d) {
+        if s.native_view.is_none() && docked_at.is_some_and(|d| i < d) || s.is_detached(win) {
             continue;
         }
         ui.win = Some(win);
@@ -223,6 +227,11 @@ pub fn paint(ui: &mut Ui, s: &State, f: &FrameInfo) -> usize {
         // A window paints inside its paint area (also what it marks as drawn, e.g. text's generous overhang).
         let a = paint_area(s, win);
         ui.c.push_clip(a);
+        // Transparent windows: one that isn't the active one shows what is behind it (spec: ui/animations.md §4.9). A
+        // maximized one has nothing behind it to show.
+        let inactive = i + 1 != s.z.len() && !s.is_max(win) && crate::prefs::index(&crate::prefs::TRANSPARENT_WINDOWS) == 1;
+        let opacity = s.motion.borrow_mut().window_opacity(win, None, inactive, a);
+        let behind = (opacity < 1.0 && ui.c.visible(a)).then(|| ui.c.begin_layer(a, false));
         match win {
             Win::Playlist => ui.part(Seg::Win(win), a, |ui| playlist::paint(ui, s, r, f)),
             Win::Mixer => ui.part(Seg::Win(win), a, |ui| {
@@ -244,7 +253,13 @@ pub fn paint(ui: &mut Ui, s: &State, f: &FrameInfo) -> usize {
             Win::Strum => ui.part(Seg::Win(win), a, |ui| strum::paint(ui, s, f)),
             Win::Arp => ui.part(Seg::Win(win), a, |ui| arpeggiate::paint(ui, s, f)),
             Win::PianoDlg => ui.part(Seg::Win(win), a, |ui| piano_dlg::paint(ui, s, f)),
+            Win::Events => ui.part(Seg::Win(win), a, |ui| events::paint(ui, s, f)),
+            Win::Container => ui.part(Seg::Win(win), a, |ui| container::paint(ui, s, f)),
+            Win::PluginPalette => ui.part(Seg::Win(win), a, |ui| plugin_palette::paint(ui, s, f)),
             _ => {}
+        }
+        if let Some(l) = behind {
+            ui.c.end_layer(l, opacity);
         }
         ui.c.pop_clip();
         ui.win = None;
@@ -273,7 +288,9 @@ pub fn paint(ui: &mut Ui, s: &State, f: &FrameInfo) -> usize {
     // A menu opened from the settings window (Audio page combos) goes over it; a dropdown's submenu over the dropdown;
     // the time signature dialog's value lists over the dialog.
     let over_dialog = crate::timesig::form_open(s);
-    if !s.settings.open && !over_dialog {
+    // The popups and boxes opened from a detached window are in that window (`paint_detached`).
+    let here = !s.overlay_on.is_some_and(|w| s.is_detached(w) && s.shown(w));
+    if !s.settings.open && !over_dialog && here {
         piano::paint_lane_menu(ui, s);
         playlist::paint_overlays(ui, s);
     }
@@ -281,11 +298,14 @@ pub fn paint(ui: &mut Ui, s: &State, f: &FrameInfo) -> usize {
     patterns::paint(ui, s);
     if s.settings.open {
         settings::paint(ui, s);
-        if !over_dialog {
+        if !over_dialog && here {
             playlist::paint_overlays(ui, s);
         }
     }
-    browser::paint_ghost(ui, s);
+    // A browser drag over a detached window draws its ghost there (`paint_detached`).
+    if s.drag_on.is_none_or(|w| !s.is_detached(w)) {
+        browser::paint_ghost(ui, s);
+    }
     if s.monitor.debug {
         mondebug::paint(ui, s);
     }
@@ -302,26 +322,47 @@ pub fn paint(ui: &mut Ui, s: &State, f: &FrameInfo) -> usize {
     crate::help::paint_spotlight(ui, s);
     // Message boxes and file dialogs go over everything (spec: ui/dialogs.md).
     dialog::paint(ui, s);
-    if over_dialog {
+    if over_dialog && here {
         playlist::paint_overlays(ui, s);
     }
+    s.motion.borrow_mut().paint_ghosts(ui.c);
+    overlays
+}
+
+/// Detached window `w` (Options ▸ Detached, Lemon Studio's design: spec ui/mixer.md §6.2), painted whole into its own
+/// native window's canvas: the window, then the popups and boxes opened from it (`State::overlay_on`). Returns where
+/// the overlays' hits start, as `paint` does.
+pub fn paint_detached(ui: &mut Ui, s: &State, f: &FrameInfo, w: Win) -> usize {
+    ui.c.clear(ui.t.workspace);
+    let r = s.win_rect(w);
+    let a = paint_area(s, w);
+    ui.win = Some(w);
+    ui.c.push_clip(a);
+    match w {
+        Win::Mixer => mixer::paint(ui, s, r, f),
+        Win::ChannelRack => rack::paint(ui, s, f),
+        _ => {}
+    }
+    ui.c.pop_clip();
+    ui.win = None;
+    let overlays = ui.hit_count();
+    if s.overlay_on == Some(w) {
+        if w == Win::ChannelRack {
+            rack::paint_fill(ui, s);
+        }
+        playlist::paint_overlays(ui, s);
+    }
+    if s.drag_on == Some(w) {
+        browser::paint_ghost(ui, s);
+    }
+    s.motion.borrow_mut().paint_ghosts(ui.c);
     overlays
 }
 
 /// Where window `w` paints: its rect (and the channel rack's graph editor hanging below it). The resize zones past
 /// its edges are hits only. A repaint that misses this skips the window; a playlist scroll paints around it.
 pub fn paint_area(s: &State, w: Win) -> Rect {
-    match w {
-        Win::ChannelRack => rack::paint_area(s),
-        Win::Plugin => channel_win::rect(s),
-        Win::Perf => perf::bounds(s),
-        Win::Tapper => tapper::bounds(s),
-        Win::Touch => touch::bounds(s),
-        Win::Strum => strum::bounds(s),
-        Win::Arp => arpeggiate::bounds(s),
-        Win::PianoDlg => piano_dlg::bounds(s),
-        w => s.win_rect(w),
-    }
+    crate::floating::placed(w).map_or_else(|| s.win_rect(w), |p| (p.paint)(s))
 }
 
 /// Start of a Playlist / Mixer / Piano roll window: blocks clicks through it, and (once the
@@ -364,7 +405,7 @@ pub fn window_buttons(ui: &mut Ui, win: Win, x0: f32, y: f32, _normal: Color, _h
         ui.c.stroke_rrect(r,2.,1.,if hover {ui.t.accent} else {ui.t.text_dim});
         ui.c.text_center(os_ui::Font::new(13),r,ui.t.text,"D");
     }
-    let mut hovered = None;
+    let (mut hovered, mut down) = (None, None);
     for (i, (hint, action)) in [
         ("Minimize window", Action::MinWin(win)),
         ("Maximize / restore window", Action::MaxWin(win)),
@@ -373,7 +414,11 @@ pub fn window_buttons(ui: &mut Ui, win: Win, x0: f32, y: f32, _normal: Color, _h
     .into_iter()
     .enumerate()
     {
-        if ui.hit(Rect::new(x0 + i as f32 * 19.5, y + 3.0, 17.0, 17.0), action, hint) {
+        let b = Rect::new(x0 + i as f32 * 19.5, y + 3.0, 17.0, 17.0);
+        if ui.down(b, &action) {
+            down = Some(i);
+        }
+        if ui.hit(b, action, hint) {
             hovered = Some(i);
         }
     }
@@ -381,7 +426,16 @@ pub fn window_buttons(ui: &mut Ui, win: Win, x0: f32, y: f32, _normal: Color, _h
         for i in 0..3 {
             crate::vintage_skin::native(ui.c,"WindowButtonFaces",[0,2,4][i]+usize::from(hovered==Some(i)),(x0+i as f32*19.5+1.).round(),y+6.);
         }
-    } else {kit::window_buttons(ui.c, ui.t, x0, y, hovered);}
+    } else {kit::window_buttons(ui.c, ui.t, x0, y, hovered, down);}
+}
+
+/// A window's own close ✕ in its title bar: the hit on `hit`, then the hover / pressed back of every title bar button
+/// on `back` (`kit::title_button_back`), under the glyph the caller draws. Whether the mouse is over it.
+pub fn close_button(ui: &mut Ui, hit: Rect, back: Rect, action: Action, hint: &'static str) -> bool {
+    let down = ui.down(hit, &action);
+    let hov = ui.hit(hit, action, hint);
+    kit::title_button_back(ui.c, ui.t, back, true, hov, down);
+    hov || down
 }
 
 /// Window frame with a title bar (§5); the bar drags the window. `buttons` = draw the window
@@ -409,18 +463,19 @@ pub fn window_frame_ex(ui: &mut Ui, win: Win, r: Rect, title: &str, title_x: f32
         ui.c.fill_rect(Rect::new(r.x, r.y + 22.0, r.w, 1.0), t.splitter_dark);
     }
     let font = if t.style.vintage_2005 {os_ui::Font::vintage(12)}else{kit::title_font(t, os_ui::Font::new(17))};
-    if t.appearance.title_text.is_some() {
-        let width = (r.w - title_x - if buttons { 66.0 } else { 4.0 }).max(0.0);
-        ui.c.text_clip(font, r.x + title_x, r.y + 1.0, width, t.text, title);
-    } else {
-        ui.c.text(font, r.x + title_x, r.y + 1.0, t.text, title);
-    }
+    // The title stops short of the window buttons (a narrow window cuts it).
+    ui.c.text_clip(font, r.x + title_x, r.y + 1.0, (title_room(r, buttons) - title_x).max(0.0), t.text, title);
     ui.hit(bar, Action::WinDrag(win), "Drag to move");
     // Minimize / maximize / close glyphs at the right (1862, 1881, 1901 at full width).
     if buttons {
         window_buttons(ui, win, r.right() - 64.0, r.y, t.text_dim.mix(t.glyph, 0.6), t.glyph);
     }
     Rect::new(r.x, r.y + 23.0, r.w, r.h - 23.0)
+}
+
+/// How far from a title bar's left (at `r`) its text may reach: short of the window buttons when there are any.
+pub fn title_room(r: Rect, buttons: bool) -> f32 {
+    if buttons { r.w - 68.0 } else { r.w }
 }
 
 /// Floating window frame (spec ui/piano-roll.md §1a, same for Playlist / Mixer / Piano roll):
@@ -607,9 +662,28 @@ pub fn tool_button(ui: &mut Ui, r: Rect, icon: Icon, on: bool, action: Action, h
     }
     let hov = ui.hit(r, action.clone(), hint);
     let down = ui.down(r, &action);
-    let look = if on { Look::On } else if down { Look::Hot } else if hov { Look::Hover } else { Look::Off };
+    let look = if on { Look::On } else if down { Look::Hot } else { Look::Off };
+    lit_button(ui, r, icon, look, Look::Hover, hov && !on && !down);
+}
+
+/// A toolbar button in `look`; from rest, the look `hover` comes and goes over that as `lit` says.
+pub fn lit_button(ui: &mut Ui, r: Rect, icon: Icon, look: Look, hover: Look, lit: bool) {
+    let place = Rect::new(r.x + 5.0, r.y + 6.5, 20.0, 20.0);
     let c = tool_face(ui, r, look);
-    icons::draw(ui.c, icon, Rect::new(r.x + 5.0, r.y + 6.5, 20.0, 20.0), c);
+    icons::draw(ui.c, icon, place, c);
+    let glow = button_glow(ui, r, lit);
+    if glow > 0.0 && matches!(look, Look::Off) {
+        let l = ui.c.begin_layer(r.outset(1.0), false);
+        let c = tool_face(ui, r, hover);
+        icons::draw(ui.c, icon, place, c);
+        ui.c.end_layer(l, glow);
+    }
+}
+
+/// How lit a toolbar button in `r` shows: its times and its curve are FL's, measured (spec: ui/animations.md §2.2, §4.6).
+pub fn button_glow(ui: &mut Ui, r: Rect, lit: bool) -> f32 {
+    let key = crate::motion::key((r.x.to_bits(), r.y.to_bits()));
+    ui.hover_linear(key, lit, r, crate::motion::BUTTON_HOVER).powf(1.5)
 }
 
 /// A sunken panel (hint bar, monitors): flat fill inside a 1 px dark border.
@@ -619,14 +693,30 @@ pub fn sunken(ui: &mut Ui, r: Rect, fill: Color) {
 
 /// A ring knob (toolbar style): arc from the minimum; bipolar knobs pass `center = true`.
 pub fn knob(ui: &mut Ui, cx: f32, cy: f32, r: f32, value: f32, center: bool, _c: Color, _track: Color) {
-    let hov = ui.hovering(Rect::new(cx - r, cy - r, 2.0 * r, 2.0 * r));
-    kit::knob(ui.c, ui.t, cx, cy, r, value, center, kit::KnobLook::Ring, kit::State::hover(hov));
+    hover_look(ui, Rect::new(cx - r, cy - r, 2.0 * r, 2.0 * r), |c, t, st| kit::knob(c, t, cx, cy, r, value, center, kit::KnobLook::Ring, st));
+}
+
+/// A control in `area` drawn as `draw` says, its hover look coming and going over its look at rest (spec:
+/// ui/animations.md §4.6).
+pub fn hover_look(ui: &mut Ui, area: Rect, draw: impl Fn(&mut os_ui::Canvas, &os_theme::Palette, kit::State)) {
+    let hov = ui.hovering(area);
+    let k = ui.k;
+    let up = Rect::new(area.x * k, area.y * k, area.w * k, area.h * k);
+    let lit = ui.motion.borrow_mut().hover_knob(crate::motion::key((area.x.to_bits(), area.y.to_bits())), hov, up);
+    if lit >= 1.0 {
+        return draw(ui.c, ui.t, kit::State::hover(true));
+    }
+    draw(ui.c, ui.t, kit::State::hover(false));
+    if lit > 0.0 {
+        let l = ui.c.begin_layer(area.outset(2.0), false);
+        draw(ui.c, ui.t, kit::State::hover(true));
+        ui.c.end_layer(l, lit);
+    }
 }
 
 /// A dark glossy ball knob (mixer, rack, slots) with a pointer.
 pub fn ball_knob(ui: &mut Ui, cx: f32, cy: f32, r: f32, value: f32) {
-    let hov = ui.hovering(Rect::new(cx - r, cy - r, 2.0 * r, 2.0 * r));
-    kit::knob(ui.c, ui.t, cx, cy, r, value, false, kit::KnobLook::Ball, kit::State::hover(hov));
+    hover_look(ui, Rect::new(cx - r, cy - r, 2.0 * r, 2.0 * r), |c, t, st| kit::knob(c, t, cx, cy, r, value, false, kit::KnobLook::Ball, st));
 }
 
 /// A round LED (spec §7: grey ring, green ball with a bright core when lit).

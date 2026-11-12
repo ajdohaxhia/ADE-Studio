@@ -18,7 +18,7 @@ fn load(s:&mut State,data:&[u8],merge:bool)->Result<(),String> {
     for m in profile.markers {
         let pos=(u64::from(m.position)*u64::from(s.project.ppq)+u64::from(profile.ppq)/2)/u64::from(profile.ppq);
         if pos>u32::MAX as u64{return Err("Marker position exceeds project range".into());}
-        markers.push(os_model::TimeMarker{color:m.color.map(|c|c&0xffffff),position:pos as u32,kind:m.kind,name:m.name,numerator:m.numerator,denominator:m.denominator,scale:m.scale});
+        markers.push(os_model::TimeMarker{color:m.color.map(|c|c&0xffffff),position:pos as u32,kind:m.kind,name:m.name,numerator:m.numerator,denominator:m.denominator,scale:m.scale,root:0,flag:0,scale_index:Default::default()});
     }
     pl::snapshot_as(s,"Load marker profile");
     let dest=&mut pl::arr_mut(s).markers;

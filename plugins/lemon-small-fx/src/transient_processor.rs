@@ -44,13 +44,14 @@ pub const SETTINGS: [Setting; dsp::PARAMS] = [
 
 /// Editor layout (spec §2), as the original's: the wordmark on top; the split frequency over the processing switch,
 /// the large attack knob over its shape button, the drive over the split balance, the large release knob over its
-/// shape button and the gain; the hint well along the foot.
+/// shape button and the gain; the hint well along the foot. The page's ranges end before their last number (6 px
+/// apart, 8 px from the edges); a card's `x1` and `y1` are its last pixels.
 const CARDS: [Card; 5] = [
-    Card { x0: 8.0, x1: 100.0, y0: 34.0, y1: 162.0, heading: "" },
-    Card { x0: 106.0, x1: 226.0, y0: 34.0, y1: 162.0, heading: "" },
-    Card { x0: 232.0, x1: 328.0, y0: 34.0, y1: 162.0, heading: "" },
-    Card { x0: 334.0, x1: 454.0, y0: 34.0, y1: 162.0, heading: "" },
-    Card { x0: 460.0, x1: 552.0, y0: 34.0, y1: 162.0, heading: "" },
+    Card { x0: 8.0, x1: 99.0, y0: 34.0, y1: 161.0, heading: "" },
+    Card { x0: 106.0, x1: 225.0, y0: 34.0, y1: 161.0, heading: "" },
+    Card { x0: 232.0, x1: 327.0, y0: 34.0, y1: 161.0, heading: "" },
+    Card { x0: 334.0, x1: 453.0, y0: 34.0, y1: 161.0, heading: "" },
+    Card { x0: 460.0, x1: 551.0, y0: 34.0, y1: 161.0, heading: "" },
 ];
 
 const CONTROLS: [Control; 9] = [
@@ -68,12 +69,14 @@ const CONTROLS: [Control; 9] = [
 pub const SPEC: &Spec = &Spec {
     name: "ML Transient Processor",
     word: "TRANSIENT PROCESSOR",
-    about: "ML Studio's transient processor",
+    about: "AQUILA's transient processor",
     settings: &SETTINGS,
     version: Some(dsp::VERSION),
     any_version: false,
     fields: &[],
     tail: &dsp::DISPLAY,
+    blank: None,
+    locate: None,
     size: (560, 200),
     cards: &CARDS,
     controls: &CONTROLS,
@@ -184,7 +187,7 @@ pub struct TransientProcessorKind;
 impl Kind for TransientProcessorKind {
     const SPEC: &'static Spec = SPEC;
     const CLAP_ID: &'static str = "org.openstudio.lemon-transient-processor";
-    const CLAP_DESCRIPTION: &'static str = "ML Studio's transient processor";
+    const CLAP_DESCRIPTION: &'static str = "AQUILA's transient processor";
     const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::AudioEffect, ClapFeature::TransientShaper, ClapFeature::Stereo];
     const VST3_CLASS_ID: [u8; 16] = *b"LemonStudioTrPro";
     const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] = &[Vst3SubCategory::Fx, Vst3SubCategory::Dynamics];

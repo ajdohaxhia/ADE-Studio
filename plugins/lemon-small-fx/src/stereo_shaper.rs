@@ -52,10 +52,11 @@ const PHASE: usize = 5;
 const POSITION: usize = 6;
 
 /// Editor layout (spec §2), as the original's: the four level faders of the matrix (what reaches the left output, then
-/// the right), and the effects: the position, the delay and the phase.
+/// the right), and the effects: the position, the delay and the phase. The page's ranges end before their last number
+/// (6 px apart, 8 px from the edges); a card's `x1` and `y1` are its last pixels.
 const CARDS: [Card; 2] = [
-    Card { x0: 8.0, x1: 216.0, y0: 28.0, y1: 306.0, heading: "MIXER MATRIX" },
-    Card { x0: 222.0, x1: 352.0, y0: 28.0, y1: 306.0, heading: "EFFECTS" },
+    Card { x0: 8.0, x1: 215.0, y0: 28.0, y1: 305.0, heading: "MIXER MATRIX" },
+    Card { x0: 222.0, x1: 351.0, y0: 28.0, y1: 305.0, heading: "EFFECTS" },
 ];
 
 /// A fader carrying the right input (the left's are lemon).
@@ -81,12 +82,14 @@ const CONTROLS: [Control; 7] = [
 pub const SPEC: &Spec = &Spec {
     name: "ML Stereo Shaper",
     word: "STEREO SHAPER",
-    about: "ML Studio's stereo shaper",
+    about: "AQUILA's stereo shaper",
     settings: &SETTINGS,
     version: Some(dsp::VERSION),
     any_version: true,
     fields: &FIELDS,
     tail: &[],
+    blank: None,
+    locate: None,
     size: (360, 372),
     cards: &CARDS,
     controls: &CONTROLS,
@@ -207,7 +210,7 @@ pub struct StereoShaperKind;
 impl Kind for StereoShaperKind {
     const SPEC: &'static Spec = SPEC;
     const CLAP_ID: &'static str = "org.openstudio.lemon-stereo-shaper";
-    const CLAP_DESCRIPTION: &'static str = "ML Studio's stereo shaper";
+    const CLAP_DESCRIPTION: &'static str = "AQUILA's stereo shaper";
     const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::AudioEffect, ClapFeature::Utility, ClapFeature::Mixing, ClapFeature::Stereo];
     const VST3_CLASS_ID: [u8; 16] = *b"LemonStudioStShp";
     const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] = &[Vst3SubCategory::Fx, Vst3SubCategory::Spatial];

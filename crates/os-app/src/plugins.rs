@@ -39,6 +39,9 @@ pub struct Hosted {
     pub plugin: SharedPlugin,
     /// Last program selected through the host, for the preset label and stepping.
     pub preset_program: Option<(u32, u32, String)>,
+    /// The channel or slot plugin it plays (`os_model::Id`): the control plane keeps it with them when rows or slots
+    /// move under it (`App::follow_ids`). `Id::NONE` until the next tick takes the id of what is under its key.
+    pub owner: os_model::Id,
     /// Processing time and voices, read without locking the instance (spec: ui/plugin-performance.md §3,
     /// audio/voices.md §5).
     pub meter: Option<Arc<os_host::Meter>>,
@@ -69,7 +72,7 @@ pub struct Hosted {
     pub attention: Option<Arc<os_host::Attention>>,
     /// The count and time `idle` last looked at it (`Hosted::due`).
     seen: Look,
-    /// Its window opens detached: set when the user adds it while "Detach all new plugins" is on (`Plugins::added`),
+    /// Its window opens detached: set when the user adds it while "Open new plugin windows floating" is on (`Plugins::added`),
     /// or chosen for it (window menu > Detached, Switch all plugin editors to ▸), then the mode its window had when it
     /// last closed (spec: ui/settings-choices.md "Miscellaneous: naming, detached plugins and startup").
     #[cfg_attr(not(plugin_windows), allow(dead_code))]
@@ -80,6 +83,12 @@ pub struct Hosted {
     /// When its open window opened (`Plugins::opens`): the limit on open editors closes the earliest first.
     #[cfg(plugin_windows)]
     opened: u64,
+    /// Its spare state (window or slot menu ▸ Copy to B; `presets::PCmd::StoreSpare`): a second copy of its
+    /// state that Swap A / B swaps with the one in use. Lemon Studio's choice: kept in memory with the
+    /// instance only, not in the project (spec: ui/plugin-window.md "Spare state").
+    pub spare: Option<Vec<u8>>,
+    /// "Display preset name in preset selector" unticked: its window's Presets box shows no preset name.
+    pub hide_preset: bool,
 }
 
 /// When the UI last locked an instance for one of its per-tick jobs: the attention count it acted on, and when.
@@ -99,6 +108,56 @@ impl Look {
 /// An instance whose count did not move is still looked at this often (anything a plugin did not report).
 const LOOK_EVERY: Duration = Duration::from_millis(250);
 
+
+/// How long a whole-state read waits for its moment (`lock_between_blocks`): two blocks of 256 frames and more.
+pub const STATE_WAIT: Duration = Duration::from_millis(12);
+/// How long the UI's per-tick work may wait for such moments, all instances together, per `TICK_WINDOW`: the wait is on
+/// the UI thread, and a project has many instances. Past it, an instance not free at once skips the tick.
+const TICK_BUDGET: Duration = Duration::from_millis(3);
+const TICK_WINDOW: Duration = Duration::from_millis(16);
+
+thread_local! {
+    /// When the current `TICK_WINDOW` started and what it has waited.
+    static TICK_WAITED: std::cell::Cell<Option<(Instant, Duration)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Locks `m` for the UI's per-tick work on an instance (its idle, its parameters), `None` to skip
+/// the tick. One whose holds are short (`Meter::holds_long`) is taken if free, with no wait; a long one waits for the
+/// moment between two blocks (`lock_between_blocks`), out of `TICK_BUDGET`.
+pub fn lock_for_tick<'a, T: ?Sized>(m: &'a std::sync::Mutex<T>, meter: Option<&os_host::Meter>) -> Option<std::sync::MutexGuard<'a, T>> {
+    if !meter.is_some_and(os_host::Meter::holds_long) {
+        return m.try_lock().ok();
+    }
+    let t0 = Instant::now();
+    let (start, waited) = TICK_WAITED.get().filter(|(s, _)| t0.duration_since(*s) < TICK_WINDOW).unwrap_or((t0, Duration::ZERO));
+    let got = lock_between_blocks(m, meter, TICK_BUDGET.saturating_sub(waited));
+    TICK_WAITED.set(Some((start, waited + t0.elapsed())));
+    got
+}
+
+/// Locks `m` for a UI call that may hold it a few ms: right after the audio thread processed it (`meter`), when it will
+/// not need it again for most of a block (it gives up on an instance it waits for over 2 ms: a late plugin), else at
+/// once when nothing is processing it. Waits up to `wait` for that moment; `None` when it did not come.
+pub fn lock_between_blocks<'a, T: ?Sized>(m: &'a std::sync::Mutex<T>, meter: Option<&os_host::Meter>, wait: Duration) -> Option<std::sync::MutexGuard<'a, T>> {
+    const JUST: Duration = Duration::from_millis(1);
+    const IDLE: Duration = Duration::from_millis(50);
+    let t0 = Instant::now();
+    loop {
+        let free = match meter.and_then(|m| m.since_processed()) {
+            None => true,
+            Some(d) => d <= JUST || d >= IDLE,
+        };
+        if free {
+            // The audio thread holds it only while processing: a short wait if it just started another block.
+            return m.lock().ok();
+        }
+        if t0.elapsed() >= wait {
+            return None;
+        }
+        std::thread::sleep(Duration::from_micros(200));
+    }
+}
+
 impl Hosted {
     /// A newly hosted instance, without a window.
     pub fn new(plugin: SharedPlugin) -> Hosted {
@@ -109,6 +168,7 @@ impl Hosted {
             ara_source: None,
             plugin,
             preset_program: None,
+            owner: os_model::Id::NONE,
             meter,
             name,
             #[cfg(plugin_windows)]
@@ -130,12 +190,32 @@ impl Hosted {
             placed: None,
             #[cfg(plugin_windows)]
             opened: 0,
+            spare: None,
+            hide_preset: false,
         }
+    }
+
+    /// Locks the instance to read its whole state (a save, an autosave): between two of its blocks
+    /// ([`lock_between_blocks`]), else once the audio thread lets go of it. Never fails for want of the moment.
+    pub fn lock_for_state(&self) -> Option<std::sync::MutexGuard<'_, dyn os_host::Plugin + 'static>> {
+        self.lock_between_blocks().or_else(|| self.plugin.lock().ok())
+    }
+
+    /// Locks the instance for a UI call that may hold it a few ms (reading its state), between two of its blocks
+    /// ([`lock_between_blocks`]).
+    pub fn lock_between_blocks(&self) -> Option<std::sync::MutexGuard<'_, dyn os_host::Plugin + 'static>> {
+        lock_between_blocks(&self.plugin, self.meter.as_deref(), STATE_WAIT)
     }
 
     /// Whether a per-tick job last done at `last` should lock the instance now, and the look to remember if it does:
     /// its attention count moved, its editor is open, it has no count, or `LOOK_EVERY` passed. Otherwise the UI leaves
     /// it to the audio thread (spec: audio/implementing.md "Playing live").
+    /// How often the instance has asked for attention (a parameter changed in its window, a state to save...); None
+    /// for one that never says.
+    pub fn attention_count(&self) -> Option<u64> {
+        self.attention.as_ref().map(|a| a.count())
+    }
+
     pub fn due(&self, last: Look) -> Option<Look> {
         let now = Instant::now();
         let Some(a) = &self.attention else {
@@ -192,7 +272,11 @@ pub enum Request {
     /// A sample file a Lemon plugin sent (host link `Audio`, Tesla's Send): to the selected channel (true) or the
     /// playlist.
     #[cfg_attr(not(plugin_windows), allow(dead_code))]
-    Audio(String, bool),
+    Audio(String, os_hostlink::AudioTo),
+    /// Notes a Lemon plugin sent for its channel's current pattern (host link `Notes`, Lemon Slicer's dump): row,
+    /// notes.
+    #[cfg_attr(not(plugin_windows), allow(dead_code))]
+    Notes(usize, Vec<os_hostlink::NoteOut>),
     /// The window was clicked (or docked / detached): it goes to the front of the app's window stack.
     Raise(usize),
     Detach(usize, bool),
@@ -225,6 +309,11 @@ pub enum Request {
 /// Keys from here up are mixer slots, not rack rows: `FX_KEY + track * 64 + slot` (spec: ui/mixer.md §7).
 pub const FX_KEY: usize = 1 << 24;
 
+/// Keys from here up are the effects inside containers (`crate::container`), numbered in the order they were made
+/// (`Plugins::next_member`): neither rack rows nor slots, hosted for their windows, parameters, presets and
+/// housekeeping. Automation and links name them by their container's slot and their id instead (`params::target_of`).
+pub const MEMBER_KEY: usize = 1 << 26;
+
 /// Plugin editor windows open at once under "Limit the number of open plugin editors" (FL's hint: 25; spec:
 /// ui/settings-choices.md "Miscellaneous: naming, detached plugins and startup").
 pub const MAX_EDITORS: usize = 25;
@@ -253,9 +342,9 @@ pub fn fx_key(track: u16, slot: u8) -> usize {
     FX_KEY + usize::from(track) * 64 + usize::from(slot)
 }
 
-/// The mixer (track, slot) of a `hosted` key, `None` for rack rows.
+/// The mixer (track, slot) of a `hosted` key, `None` for rack rows and container members.
 pub fn fx_of(key: usize) -> Option<(u16, u8)> {
-    (key >= FX_KEY).then(|| (((key - FX_KEY) / 64) as u16, ((key - FX_KEY) % 64) as u8))
+    (FX_KEY..MEMBER_KEY).contains(&key).then(|| (((key - FX_KEY) / 64) as u16, ((key - FX_KEY) % 64) as u8))
 }
 
 #[derive(Default)]
@@ -286,15 +375,35 @@ pub struct Plugins {
     /// The file and stamp each found plugin was listed from (uid -> path, size, time): an unchanged file keeps its
     /// library (and a library loaded for use stays loaded).
     stamps: HashMap<String, (String, u64, u64)>,
+    /// The rate new instances start at; 0 until the first one asks the output device. An instance handed a block at any
+    /// other rate stays silent until the UI moves it, and the device's rate depends on the machine: a test that
+    /// processes at a literal rate pins it first (`set_rate`).
     rate: u32,
     /// Verdicts of the one-time child-process check a native plugin passes before its first load here (spec:
     /// plugins/fruity-abi.md "Crash containment"). `None`: no check (tests, where this program is the test harness).
     native_checks: Option<os_native::check::Checks>,
+    /// Instances that went with their channel or slot, by its id: (an effect, the plugin's uid, its saved state).
+    /// Only those whose channel or slot went (`keep`); an undo that brings it back hosts it again from here
+    /// (`App::follow_ids`); the oldest go past `STASH_MAX`.
+    pub stash: Vec<(os_model::Id, bool, String, Vec<u8>)>,
+    /// A plugin menu's Scaling ▸ (Lemon Studio's design, session only), by `hosted` key: the scale its window and
+    /// editor are drawn at instead of the program's (`scale_for`).
+    pub editor_scales: BTreeMap<usize, f32>,
+    /// The containers playing mixer slots, by `fx_key` (`crate::container`).
+    pub containers: BTreeMap<usize, crate::container::Live>,
+    /// The next container member's key, counted from `MEMBER_KEY`.
+    pub next_member: usize,
+    /// The Lemon MIDI Out instruments, by rack row (`App::sync_midi_outs`; spec: plugins/midi-out.md §6).
+    pub midi_outs: BTreeMap<usize, std::sync::Arc<std::sync::Mutex<crate::lemon_midi_out::MidiOutInstrument>>>,
 }
 
+/// How many gone instances `Plugins::stash` keeps.
+const STASH_MAX: usize = 64;
+
 /// Lemon Sampler compiled into Lemon Studio and hosted through its own CLAP entry, so sampler channels never depend on
-/// finding a `.clap` file (spec: plugins/lemon-sampler.md §7); Lemon Trio and Citrus likewise (spec:
-/// plugins/lemon-3x-osc.md §6, plugins/citrus.md).
+/// finding a `.clap` file (spec: plugins/lemon-sampler.md §7); Lemon Trio, Citrus, Smith, Lemon Slicer and Lemon Drum
+/// Sampler likewise (spec: plugins/lemon-3x-osc.md §6, plugins/citrus.md, plugins/smith.md, plugins/lemon-slicer.md §6,
+/// plugins/lemon-drum-sampler.md §4).
 pub fn builtin() -> Vec<Available> {
     lemon_chop::set_separator(crate::stem_separation::separate_for_chop);
     static WAVE: OnceLock<Option<Arc<os_clap::Library>>> = OnceLock::new();
@@ -302,6 +411,9 @@ pub fn builtin() -> Vec<Available> {
     static LIB: OnceLock<Option<Arc<os_clap::Library>>> = OnceLock::new();
     static OSC3: OnceLock<Option<Arc<os_clap::Library>>> = OnceLock::new();
     static CITRUS: OnceLock<Option<Arc<os_clap::Library>>> = OnceLock::new();
+    static SMITH: OnceLock<Option<Arc<os_clap::Library>>> = OnceLock::new();
+    static SLICER: OnceLock<Option<Arc<os_clap::Library>>> = OnceLock::new();
+    static DRUMS: OnceLock<Option<Arc<os_clap::Library>>> = OnceLock::new();
     let mut v = linked(&LIB, &lemon_sampler::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void, LEMON_SAMPLER);
     v.extend(linked(&OSC3, &lemon_3x_osc::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void, crate::osc3::LEMON_TRIO));
     v.extend(linked(&WAVE, &lemon_wave::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void, "ML Wave"));
@@ -311,6 +423,9 @@ pub fn builtin() -> Vec<Available> {
     }
     v.extend(linked(&CHOP, &lemon_chop::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void, "ML Chop"));
     v.extend(linked(&CITRUS, &citrus::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void, crate::citrus::CITRUS));
+    v.extend(linked(&SMITH, &smith::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void, crate::smith::SMITH));
+    v.extend(linked(&SLICER, &lemon_slicer::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void, crate::slicer::LEMON_SLICER));
+    v.extend(linked(&DRUMS, &lemon_drum_sampler::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void, crate::drums::LEMON_DRUMS));
     v
 }
 
@@ -335,9 +450,16 @@ pub fn builtin_effects() -> Vec<Available> {
         &lemon_transient_processor::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
         &lemon_chorus::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
         &lemon_stereo_shaper::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
+        &lemon_filter::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
         &tesla::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
         &lemon_tape::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
         &lemon_hall::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
+        &lemon_flanger::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
+        &lemon_phaser::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
+        &lemon_peak_controller::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
+        &lemon_formula_controller::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
+        &lemon_vocoder::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
+        &lemon_drop::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
     ];
     let names = FILE_MAPPED.into_iter().chain(LINKED_EFFECTS);
     LIBS.iter().zip(entries).zip(names).flat_map(|((lib, entry), name)| linked(lib, entry, name)).collect()
@@ -529,6 +651,14 @@ impl Plugins {
             let saved=os_vst3::ara::State::decode(st)?;
             return self.create_ara(row,&saved.plugin_path,&saved.class_id,&saved.source_path,Some(st));
         }
+        let (plugin, name) = self.instantiate(index, state)?;
+        self.hosted.insert(row, Hosted::new(plugin));
+        Ok(name)
+    }
+
+    /// An instance of instrument `index` (of `available`) started from `state`, activated at the device rate, not
+    /// hosted under any key (`create_with` hosts it; a channel's container's member, `crate::container`).
+    pub fn instantiate(&mut self, index: usize, state: Option<&[u8]>) -> Result<(SharedPlugin, String), String> {
         let a = self.available.get(index).ok_or("no such plugin")?.clone();
         self.native_check(&a.desc)?;
         let plugin = a.lib.clone().create(&a.desc.id)?;
@@ -551,16 +681,25 @@ impl Plugins {
         p.use_start_param(SAMPLE_START);
         // A note's own pan and mod X / Y reach the built-in Lemon instruments only (spec: audio/voice-levels.md); audio
         // clips' fades and gain reach Lemon Sampler's voices one by one, so overlapping clips of one sample crossfade
-        // (spec: audio/audio-clips.md "Fades and clip gain").
+        // (spec: audio/audio-clips.md "Fades and clip gain"); the instruments work the channel's volume and pan into
+        // their voices' final levels (spec: audio/voice-levels.md "Final levels").
         if crate::project_plugins::is_builtin(&a.desc) {
             p.use_note_levels();
             if a.desc.name == LEMON_SAMPLER {
                 p.use_voice_gains();
+                // Each audio clip's voice ends at its trimmed end, in the sampler (spec: audio/audio-clips.md "What a
+                // clip plays").
+                p.use_end_param(CLIP_END);
+            }
+            if [LEMON_SAMPLER, crate::osc3::LEMON_TRIO, crate::citrus::CITRUS].contains(&a.desc.name.as_str()) {
+                p.use_channel_levels();
+            }
+            if a.desc.name == crate::citrus::CITRUS {
+                p.use_param_aliases(crate::citrus::SYTRUS_PARAMS);
             }
         }
         drop(p);
-        self.hosted.insert(row, Hosted::new(plugin));
-        Ok(a.desc.name)
+        Ok((plugin, a.desc.name))
     }
 
     pub fn create_ara(&mut self,row:usize,path:&Path,id:&str,source:&str,state:Option<&[u8]>)->Result<String,String> {
@@ -606,13 +745,20 @@ impl Plugins {
         Ok(name)
     }
 
-    pub(crate) fn prepare_effect(&mut self, index: usize, state: Option<&[u8]>, strict: bool) -> Result<Hosted, String> {
+    pub(crate) fn prepare_effect(&mut self, index: usize, state: Option<&[u8]>, _strict: bool) -> Result<Hosted, String> {
+        let (plugin, _) = self.instantiate_effect(index, state)?;
+        Ok(Hosted::new(plugin))
+    }
+
+    /// An instance of effect `index` (of `effects`) started from `state`, activated at the device rate, not hosted under
+    /// any key (a container's member, `crate::container`).
+    pub fn instantiate_effect(&mut self, index: usize, state: Option<&[u8]>) -> Result<(SharedPlugin, String), String> {
         let a = self.effects.get(index).ok_or("no such effect")?.clone();
         self.native_check(&a.desc)?;
         let plugin = a.lib.clone().create(&a.desc.id)?;
         let mut p = plugin.lock().map_err(|_| "plugin busy")?;
         if let Some(st) = state {
-            if !p.load_state(st) && (strict||!st.is_empty()) {return Err(format!("{} rejected its saved settings; the original project state has been preserved",a.desc.name));}
+            if !p.load_state(st) && !st.is_empty() {return Err(format!("{} rejected its saved settings; the original project state has been preserved",a.desc.name));}
         }
         if self.rate == 0 {
             self.rate = crate::transport::Transport::device_rate().unwrap_or(48000);
@@ -621,11 +767,11 @@ impl Plugins {
             return Err(format!("{} could not start", a.desc.name));
         }
         drop(p);
-        Ok(Hosted::new(plugin))
+        Ok((plugin, a.desc.name))
     }
 
     /// The user just added the instance under `key` (a new channel's plugin, a new effect in a slot): its window opens
-    /// detached while "Detach all new plugins" is on. Instances a project brings open docked, as before (spec:
+    /// detached while "Open new plugin windows floating" is on. Instances a project brings open docked, as before (spec:
     /// ui/settings-choices.md "Miscellaneous: naming, detached plugins and startup").
     pub fn added(&mut self, key: usize) {
         let on = crate::prefs::check(&crate::prefs::DETACH_NEW);
@@ -643,6 +789,28 @@ impl Plugins {
         self.presets.remove(&key);
     }
 
+    /// Keeps the state of the instance under `key`, about to go with its channel or slot, in `stash` by its owner's id.
+    pub fn keep(&mut self, key: usize) {
+        if let Some(h) = self.hosted.remove(&key) {
+            self.keep_hosted(&h, key >= FX_KEY);
+            self.hosted.insert(key, h);
+        }
+    }
+
+    /// `keep` for an instance already taken out of `hosted`.
+    fn keep_hosted(&mut self, h: &Hosted, fx: bool) {
+        if h.owner.is_none() || h.stopped() {
+            return;
+        }
+        let Some((uid, state)) = h.lock_for_state().and_then(|p| Some((p.desc().uid(), p.save_state()?))) else { return };
+        let owner = h.owner;
+        self.stash.retain(|e| e.0 .0 != owner.0);
+        self.stash.push((owner, fx, uid, state));
+        if self.stash.len() > STASH_MAX {
+            self.stash.remove(0);
+        }
+    }
+
     /// Remembers the preset the instance under `key` holds and shows its name in the window's Presets box.
     pub fn set_preset(&mut self, key: usize, path: Option<PathBuf>) {
         if let Some(hosted) = self.hosted.get_mut(&key) {
@@ -654,7 +822,7 @@ impl Plugins {
         };
         #[cfg(plugin_windows)]
         if let Some(w) = self.hosted.get(&key).and_then(|h| h.window.as_ref()) {
-            w.set_preset(self.preset_name(key));
+            w.set_preset(self.shown_preset(key));
         }
     }
 
@@ -664,9 +832,26 @@ impl Plugins {
             .or_else(|| self.hosted.get(&key)?.preset_program.as_ref().map(|(_, _, name)| name.clone()))
     }
 
+    /// What the window's Presets box of the instance under `key` shows: its preset's name, none while "Display preset
+    /// name in preset selector" is unticked.
+    pub fn shown_preset(&self, key: usize) -> Option<String> {
+        self.preset_name(key).filter(|_| !self.hosted.get(&key).is_some_and(|h| h.hide_preset))
+    }
+
+    /// Window or slot menu ▸ Display preset name in preset selector: ticks (`show`) or unticks it for the instance under
+    /// `key`; the open window's Presets box follows.
+    pub fn show_preset_name(&mut self, key: usize, show: bool) {
+        let Some(h) = self.hosted.get_mut(&key) else { return };
+        h.hide_preset = !show;
+        #[cfg(plugin_windows)]
+        if let Some(w) = self.hosted.get(&key).and_then(|h| h.window.as_ref()) {
+            w.set_preset(self.shown_preset(key));
+        }
+    }
+
     /// Moves mixer slot instances: `m(track, slot)` gives the new place, `None` drops the instance.
     pub fn remap_fx(&mut self, m: &dyn Fn(u16, u8) -> Option<(u16, u8)>) {
-        let keys: Vec<usize> = self.hosted.keys().copied().filter(|&k| k >= FX_KEY).collect();
+        let keys: Vec<usize> = self.hosted.keys().copied().filter(|&k| fx_of(k).is_some()).collect();
         let mut moved = Vec::new();
         for k in keys {
             let (t, s) = fx_of(k).unwrap();
@@ -678,21 +863,30 @@ impl Plugins {
                     }
                     moved.push((fx_key(nt, ns), self.hosted.remove(&k).unwrap()))
                 }
-                None => self.drop_key(k),
+                None => {
+                    self.keep(k);
+                    self.drop_key(k);
+                }
             }
         }
         for (k, h) in moved {
-            self.hosted.insert(k, h);
+            if let Some(old) = self.hosted.insert(k, h) {
+                self.keep_hosted(&old, true);
+            }
         }
     }
 
     /// The mixer slot instances for the transport: (track, slot, effect).
     pub fn effects(&self) -> Vec<(usize, usize, SharedEffect)> {
-        self.hosted
-            .range(FX_KEY..)
-            .map(|(&k, h)| {
+        let hosted = self.hosted.range(FX_KEY..MEMBER_KEY).map(|(&k, h)| (k, h.plugin.clone() as SharedEffect));
+        // A container's chain plays its slot (after a hosted instance still under the key, which it replaces); a
+        // channel's container is an instrument (`instruments`).
+        let chains = self.containers.range(FX_KEY..).map(|(&k, c)| (k, c.fx.clone() as SharedEffect));
+        hosted
+            .chain(chains)
+            .map(|(k, fx)| {
                 let (t, s) = fx_of(k).unwrap();
-                (usize::from(t), usize::from(s), h.plugin.clone() as SharedEffect)
+                (usize::from(t), usize::from(s), fx)
             })
             .collect()
     }
@@ -727,8 +921,9 @@ impl Plugins {
     /// The saved state of the instance under `key`, in its format's own bytes.
     pub fn state(&self, key: usize) -> Option<Vec<u8>> {
         #[cfg(test)] if self.state_fail.contains(&key){return None;}
-        self.hosted.get(&key)?.plugin.lock().ok()?.save_state()
+        self.hosted.get(&key)?.lock_for_state()?.save_state()
     }
+
 
     /// Marks the instance under `key`, just created, as a copy standing in for a plugin in another format
     /// (`Hosted::stand_in`).
@@ -763,14 +958,12 @@ impl Plugins {
     }
 
     /// The parameters of the instance under `key`, in the plugin's order.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn param_infos(&self, key: usize) -> Vec<os_host::ParamInfo> {
         let Some(p) = self.hosted.get(&key).and_then(|h| h.plugin.lock().ok()) else { return Vec::new() };
         (0..p.param_count()).filter_map(|i| p.param_info(i)).collect()
     }
 
     /// The normalized value of parameter `id` of the instance under `key`.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn param_value(&self, key: usize, id: u32) -> Option<f64> {
         self.hosted.get(&key)?.plugin.lock().ok()?.param_value(id)
     }
@@ -806,7 +999,7 @@ impl Plugins {
     /// `None` when the slot hosts something else.
     pub fn eq_file_state(&self, key: usize) -> Option<Vec<u8>> {
         let h = self.hosted.get(&key)?;
-        let p = h.plugin.lock().ok()?;
+        let p = h.lock_for_state()?;
         if p.desc().name != LEMON_EQ {
             return None;
         }
@@ -816,7 +1009,7 @@ impl Plugins {
     /// Edison's state (the project file's form) of the Tesla hosted under `key`; `None` for any other plugin.
     pub fn edison_file_state(&self, key: usize) -> Option<Vec<u8>> {
         let h = self.hosted.get(&key)?;
-        let p = h.plugin.lock().ok()?;
+        let p = h.lock_for_state()?;
         if p.desc().name != TESLA {
             return None;
         }
@@ -827,7 +1020,7 @@ impl Plugins {
     /// plugin, and for one on its starting state that was never edited.
     pub fn love_philter_file_state(&self, key: usize) -> Option<Vec<u8>> {
         let h = self.hosted.get(&key)?;
-        let p = h.plugin.lock().ok()?;
+        let p = h.lock_for_state()?;
         if p.desc().name != PULP_FILTER {
             return None;
         }
@@ -838,7 +1031,7 @@ impl Plugins {
     /// for one on its starting state that was never edited.
     pub fn maximus_file_state(&self, key: usize) -> Option<Vec<u8>> {
         let h = self.hosted.get(&key)?;
-        let p = h.plugin.lock().ok()?;
+        let p = h.lock_for_state()?;
         if p.desc().name != PRESS {
             return None;
         }
@@ -850,7 +1043,7 @@ impl Plugins {
     pub fn recreation_file_state(&self, key: usize, file: &str) -> Option<Vec<u8>> {
         let lemon = recreation_of(file)?;
         let h = self.hosted.get(&key)?;
-        let p = h.plugin.lock().ok()?;
+        let p = h.lock_for_state()?;
         if p.desc().name != lemon || !crate::project_plugins::is_builtin(p.desc()) {
             return None;
         }
@@ -960,14 +1153,19 @@ impl Plugins {
             self.close_window(row);
         }
         self.hosted.clear();
+        self.containers.clear();
         self.presets.clear();
+        self.stash.clear();
         self.preset_waits.clear();
+        // Scaling ▸ belongs to the project's windows: an opened project brings its own (`lemon_state`).
+        self.editor_scales.clear();
+        self.midi_outs.clear();
     }
 
     /// The sample file a Lemon Sampler instance holds (its persisted `sample-path`), `Some("")` when it has none.
     pub fn sampler_path(&self, row: usize) -> Option<String> {
         let h = self.hosted.get(&row)?;
-        let blob = h.plugin.lock().ok()?.save_state()?;
+        let blob = h.lock_for_state()?.save_state()?;
         sample_path_of(&blob)
     }
 
@@ -975,6 +1173,8 @@ impl Plugins {
     /// Switches every hosted instance to offline rendering (an export) or back to live playback: plugins that know
     /// the difference use their best quality offline (Lemon Sampler: the resampler's exact weights).
     pub fn set_offline(&mut self, offline: bool) {
+        // Lemon MIDI Out sends nothing while a render or export runs.
+        crate::lemon_midi_out::set_offline(offline);
         for h in self.hosted.values() {
             if let Ok(mut p) = h.plugin.lock() {
                 p.set_offline(offline);
@@ -1003,7 +1203,10 @@ impl Plugins {
     }
 
     pub fn instruments(&self) -> Vec<(usize, SharedInstrument)> {
-        self.hosted.range(..FX_KEY).map(|(&r, h)| (r, h.plugin.clone() as SharedInstrument)).collect()
+        let hosted = self.hosted.range(..FX_KEY).map(|(&r, h)| (r, h.plugin.clone() as SharedInstrument));
+        // A channel's container plays its channel (`crate::container`).
+        let chains = self.containers.range(..FX_KEY).map(|(&r, c)| (r, c.fx.clone() as SharedInstrument));
+        hosted.chain(self.midi_outs.iter().map(|(&r, m)| (r, m.clone() as SharedInstrument))).chain(chains).collect()
     }
 
     /// Tells instance `key` that its menu `id` closed, with the entry picked: a pick runs now, on this (the UI) thread
@@ -1028,7 +1231,7 @@ impl Plugins {
     #[cfg(plugin_windows)]
     pub fn open_window(&mut self, row: usize, info: ChannelInfo) -> Result<(), String> {
         #[cfg(any(windows,target_os="macos"))] self.close_rack(row);
-        let (owner, scale) = (self.owner, self.scale);
+        let (owner, scale) = (self.owner, self.scale_for(row, self.scale));
         let h = self.hosted.get(&row).ok_or("not a plugin channel")?;
         if let Some(w) = &h.window {
             w.raise();
@@ -1080,7 +1283,7 @@ impl Plugins {
         h.window = Some(w);
         self.opens += 1;
         h.opened = self.opens;
-        let name = self.preset_name(row);
+        let name = self.shown_preset(row);
         if let Some(w) = self.hosted.get(&row).and_then(|h| h.window.as_ref()) {
             w.set_preset(name);
         }
@@ -1097,6 +1300,24 @@ impl Plugins {
         }
     }
 
+    /// The scale row `row`'s window is drawn at where the program would use `scale`: its Scaling ▸ choice, if any.
+    pub fn scale_for(&self, row: usize, scale: f32) -> f32 {
+        self.editor_scales.get(&row).copied().unwrap_or(scale)
+    }
+
+    /// Scaling ▸ for row `row` (`None`: Main, the program's scale): an open window is drawn again at once.
+    pub fn set_editor_scale(&mut self, row: usize, scale: Option<f32>) {
+        match scale {
+            Some(k) => self.editor_scales.insert(row, k),
+            None => self.editor_scales.remove(&row),
+        };
+        #[cfg(any(windows, target_os = "macos"))]
+        if self.hosted.get(&row).is_some_and(|h| h.window.is_some()) {
+            let k = self.scale_for(row, self.scale);
+            self.rescale_window(row, k);
+        }
+    }
+
     /// The main window's DPI scale changed: docked windows follow it (detached ones follow their own monitor,
     /// `FrameEvent::Dpi`). Spec: ui/ui-scaling.md §3.
     pub fn set_scale(&mut self, scale: f32) {
@@ -1106,7 +1327,7 @@ impl Plugins {
         self.scale = scale;
         #[cfg(any(windows, target_os = "macos"))]
         for row in self.docked() {
-            self.pending_scales.insert(row,scale);
+            self.pending_scales.insert(row, self.scale_for(row, scale));
         }
     }
 
@@ -1216,6 +1437,14 @@ impl Plugins {
         }
     }
 
+    /// Moves row `row`'s docked window to `(x, y)` (main-window client px; VIEW > Align all channel editors).
+    #[cfg(all(plugin_windows, windows))]
+    pub fn move_docked(&self, row: usize, x: i32, y: i32) {
+        if let Some(w) = self.hosted.get(&row).and_then(|h| h.window.as_ref()) {
+            w.move_to(x, y);
+        }
+    }
+
     /// Clips row `row`'s docked window to `work` minus `covers` (main-window client px).
     #[cfg(plugin_windows)]
     pub fn clip(&self, row: usize, work: [i32; 4], covers: &[[i32; 4]]) {
@@ -1224,13 +1453,23 @@ impl Plugins {
         }
     }
 
-    /// Rack rows were renumbered (`m(old) = new`; `None` drops the instance and its window).
+    /// Rack rows were renumbered (`m(old) = new`; `None` drops the instance and its window). The presets the instances
+    /// hold go with them.
     pub fn remap(&mut self, m: &dyn Fn(usize) -> Option<usize>) {
+        self.midi_outs = std::mem::take(&mut self.midi_outs).into_iter().filter_map(|(r, i)| Some((m(r)?, i))).collect();
+        let rows: Vec<usize> = self.presets.range(..FX_KEY).map(|(&r, _)| r).collect();
+        let presets: Vec<(usize, PathBuf)> = rows.into_iter().filter_map(|r| Some((r, self.presets.remove(&r)?))).filter_map(|(r, p)| Some((m(r)?, p))).collect();
+        self.presets.extend(presets);
         for (row, h) in std::mem::take(&mut self.hosted) {
             if row >= FX_KEY {
                 self.hosted.insert(row, h);
             } else if let Some(n) = m(row) {
-                self.hosted.insert(n, h);
+                // Two instances mapped onto one row: the one there goes, kept.
+                if let Some(old) = self.hosted.insert(n, h) {
+                    self.keep_hosted(&old, false);
+                }
+            } else {
+                self.keep_hosted(&h, false);
             }
         }
     }
@@ -1272,6 +1511,8 @@ impl Plugins {
                 (Some(row), crate::plugin_window::LinkMsg::BrowseSample) => out.push(Request::BrowseSample(row)),
                 (Some(row), crate::plugin_window::LinkMsg::Automate(i)) => out.push(Request::Automate(row, i)),
                 (_, crate::plugin_window::LinkMsg::Audio(_)) => out.extend(os_hostlink::take_audio().into_iter().map(|(p, ch)| Request::Audio(p, ch))),
+                (Some(row), crate::plugin_window::LinkMsg::Notes(token)) => out.push(Request::Notes(row, os_hostlink::take_notes(token))),
+                (None, crate::plugin_window::LinkMsg::Notes(token)) => drop(os_hostlink::take_notes(token)),
                 _ => {}
             }
         }
@@ -1280,7 +1521,8 @@ impl Plugins {
             let mut menu: Option<(os_host::Menu, (i32, i32))> = None;
             #[cfg(plugin_windows)] let mut editor_layout = None;
             #[cfg(any(windows,target_os="macos"))] let mut embedded_size = None;
-            if let Some(mut p) = look.and_then(|_| h.plugin.try_lock().ok()) {
+            if let Some(mut p) = look.and_then(|_| lock_for_tick(&h.plugin, h.meter.as_deref())) {
+                let t0 = Instant::now();
                 h.seen = look.unwrap_or(h.seen);
                 // A crash stopped it (spec: plugins/plugin-formats.md, "Crash containment"): said once, window closed.
                 if let (Some(code), false) = (p.stopped(), h.stop_told) {
@@ -1322,6 +1564,11 @@ impl Plugins {
                         .unwrap_or((ew, eh));
                     editor_layout=Some((resizable,(ew as f32 / k, eh as f32 / k)));
                 }
+                if let Some(m) = &h.meter {
+                    m.note_hold(t0.elapsed());
+                }
+                #[cfg(target_os = "linux")]
+                crate::dropout_log::held(&p.desc().name, "the UI's tick", t0.elapsed());
             }
             // Native window moves/repaints may block in the OS. Do them after
             // releasing the audio plugin instance, not inside its processing lock.
@@ -1428,7 +1675,7 @@ impl Plugins {
         }
         #[cfg(any(windows, target_os = "macos"))]
         for (row, k) in rescale {
-            self.pending_scales.insert(row,k);
+            self.pending_scales.insert(row, self.scale_for(row, k));
         }
         #[cfg(any(windows, target_os = "macos"))]
         if !self.defer_editor_scale {
@@ -1443,7 +1690,7 @@ impl Plugins {
 /// What the user is told when instance `name` stopped after exception `code`.
 fn stopped_message(name: &str, code: u32, effect: bool) -> String {
     let now = if effect { "its slot passes the sound through" } else { "its channel is silent" };
-    format!("{}: {now}. Save your project and restart ML Studio to use it again", os_host::guard::stopped_text(name, code))
+    format!("{}: {now}. Save your project and restart AQUILA to use it again", os_host::guard::stopped_text(name, code))
 }
 
 /// Sizes window `w` to its freshly opened editor (`size` in device px at `scale`). A Lemon plugin answers the host
@@ -1527,7 +1774,7 @@ pub const LEMON_EQ: &str = "ML EQ";
 /// Lemon Studio's effects compiled in besides the EQ (`builtin_effects`, in this order). They have no file plugin of
 /// their own to be stored as, so a project stores them wrapped, as it stored their plugin files
 /// (`project_plugins::is_wrapped`).
-pub const LINKED_EFFECTS: [&str; 13] = [
+pub const LINKED_EFFECTS: [&str; 20] = [
     "ML Limiter",
     "ML Reverb",
     "ML Delay",
@@ -1538,13 +1785,36 @@ pub const LINKED_EFFECTS: [&str; 13] = [
     "ML Transient Processor",
     "ML Chorus",
     "ML Stereo Shaper",
+    "Lemon Filter",
     TESLA,
+    "Lemon Flanger",
+    "Lemon Phaser",
+    LEMON_PEAK_CONTROLLER,
+    LEMON_FORMULA_CONTROLLER,
+    LEMON_VOCODER,
+    LEMON_DROP,
     "ML Tape",
     "ML Hall",
 ];
 /// Lemon Studio's effects compiled in that a project stores under the FL plugin they recreate, with that plugin's
 /// state (`new_slot`, `store_builtin_states`), so they are never saved wrapped.
 pub const FILE_MAPPED: [&str; 3] = [LEMON_EQ, PULP_FILTER, PRESS];
+/// Name of Lemon Peak Controller, Lemon Studio's peak follower and LFO controller: its outputs drive the project's links
+/// (spec: plugins/lemon-peak-controller.md).
+pub const LEMON_PEAK_CONTROLLER: &str = "Lemon Peak Controller";
+/// Name of Lemon Formula Controller, Lemon Studio's formula controller: its output drives the project's links (spec:
+/// plugins/lemon-formula-controller.md).
+pub const LEMON_FORMULA_CONTROLLER: &str = "Lemon Formula Controller";
+/// Name of Lemon Vocoder, Lemon Studio's vocoder (spec: plugins/lemon-vocoder.md).
+pub const LEMON_VOCODER: &str = "Lemon Vocoder";
+/// The plugin name a project file stores for Vocodex (file-format identifier, kept for interop): slots with it are
+/// played and edited by Lemon Vocoder (spec: plugins/lemon-vocoder.md §6).
+pub const VOCODEX_FILE_NAME: &str = "Vocodex";
+/// Name of Lemon Drop, Lemon Studio's audio visualizer (spec: plugins/lemon-drop.md).
+pub const LEMON_DROP: &str = lemon_drop::NAME;
+/// The plugin name a project file stores for Wave Candy (file-format identifier, kept for interop): slots with it are
+/// shown by Lemon Drop (spec: plugins/lemon-drop.md "Projects").
+pub const WAVE_CANDY_FILE_NAME: &str = "Wave Candy";
 /// Name of Tesla, Lemon Studio's audio editor and recorder (spec: plugins/tesla/README.md).
 pub const TESLA: &str = "ML Tesla";
 /// Name of Pulp Filter, Lemon Studio's pattern-controlled multi-filter (spec: plugins/lemon-pulp-filter.md).
@@ -1608,7 +1878,7 @@ pub fn canonical_name(name: &str) -> &str {
 /// (`App::sync_effects`, `App::store_builtin_states`; spec: plugins/lemon-small-effects.md "Opened projects' slots").
 /// Not Lemon Stereo Shaper: the difference output is the mixer slot's alone (spec: plugins/lemon-stereo-shaper.md §5),
 /// so the engine's own Stereo Shaper keeps playing those slots.
-pub const FL_RECREATIONS: [(&str, &str); 9] = [
+pub const FL_RECREATIONS: [(&str, &str); 16] = [
     ("Fruity Limiter", "ML Limiter"),
     ("Fruity Reeverb 2", "ML Reverb"),
     ("Fruity Delay 3", "ML Delay"),
@@ -1618,6 +1888,13 @@ pub const FL_RECREATIONS: [(&str, &str); 9] = [
     ("Fruity Stereo Enhancer", "ML Stereo Enhancer"),
     ("Transient Processor", "ML Transient Processor"),
     ("Fruity Chorus", "ML Chorus"),
+    ("Fruity Filter", "Lemon Filter"),
+    ("Fruity Flanger", "Lemon Flanger"),
+    ("Fruity Phaser", "Lemon Phaser"),
+    ("Fruity Peak Controller", LEMON_PEAK_CONTROLLER),
+    ("Fruity Formula Controller", LEMON_FORMULA_CONTROLLER),
+    (VOCODEX_FILE_NAME, LEMON_VOCODER),
+    (WAVE_CANDY_FILE_NAME, LEMON_DROP),
 ];
 
 /// The Lemon effect of `FL_RECREATIONS` that plays slots stored as `file` (any case: files may spell the id
@@ -1639,6 +1916,13 @@ pub fn recreation_state_from_fl(lemon: &str, fl: &[u8]) -> Option<Vec<u8>> {
         "ML Stereo Enhancer" => small(lemon_small_fx::stereo_enhancer::SPEC, fl),
         "ML Transient Processor" => small(lemon_small_fx::transient_processor::SPEC, fl),
         "ML Chorus" => small(lemon_small_fx::chorus::SPEC, fl),
+        "Lemon Filter" => small(lemon_small_fx::filter::SPEC, fl),
+        "Lemon Flanger" => small(lemon_small_fx::flanger::SPEC, fl),
+        "Lemon Phaser" => small(lemon_small_fx::phaser::SPEC, fl),
+        LEMON_PEAK_CONTROLLER => small(lemon_small_fx::peak_controller::SPEC, fl),
+        LEMON_FORMULA_CONTROLLER => small(lemon_small_fx::formula_controller::SPEC, fl),
+        LEMON_VOCODER => small(lemon_small_fx::vocoder::SPEC, fl),
+        LEMON_DROP => lemon_drop::plugin_state_from_fl(fl),
         _ => return None,
     })
 }
@@ -1657,6 +1941,13 @@ pub fn fl_from_recreation_state(lemon: &str, blob: &[u8]) -> Option<Vec<u8>> {
         "ML Stereo Enhancer" => small(lemon_small_fx::stereo_enhancer::SPEC, blob),
         "ML Transient Processor" => small(lemon_small_fx::transient_processor::SPEC, blob),
         "ML Chorus" => small(lemon_small_fx::chorus::SPEC, blob),
+        "Lemon Filter" => small(lemon_small_fx::filter::SPEC, blob),
+        "Lemon Flanger" => small(lemon_small_fx::flanger::SPEC, blob),
+        "Lemon Phaser" => small(lemon_small_fx::phaser::SPEC, blob),
+        LEMON_PEAK_CONTROLLER => small(lemon_small_fx::peak_controller::SPEC, blob),
+        LEMON_FORMULA_CONTROLLER => small(lemon_small_fx::formula_controller::SPEC, blob),
+        LEMON_VOCODER => small(lemon_small_fx::vocoder::SPEC, blob),
+        LEMON_DROP => lemon_drop::fl_from_plugin_state(blob),
         _ => None,
     }
 }
@@ -1677,19 +1968,21 @@ pub fn slot_label(name: &str) -> &str {
 /// opens elsewhere; other effects by name).
 pub fn new_slot(name: &str) -> os_model::SlotPlugin {
     if name == LEMON_EQ {
-        os_model::SlotPlugin { name: EQ_FILE_NAME.into(), state: lemon_parametric_eq_2::params::default_state() }
+        os_model::SlotPlugin { id: os_model::Id::NONE, name: EQ_FILE_NAME.into(), state: lemon_parametric_eq_2::params::default_state() }
     } else if name == PULP_FILTER {
-        os_model::SlotPlugin { name: LOVE_PHILTER_FILE_NAME.into(), state: os_engine::effects::love_philter::state::State::new_default().to_bytes() }
+        os_model::SlotPlugin { id: os_model::Id::NONE, name: LOVE_PHILTER_FILE_NAME.into(), state: os_engine::effects::love_philter::state::State::new_default().to_bytes() }
     } else if name == PRESS {
-        os_model::SlotPlugin { name: MAXIMUS_FILE_NAME.into(), state: os_engine::effects::maximus::state::State::new_default().to_bytes() }
+        os_model::SlotPlugin { id: os_model::Id::NONE, name: MAXIMUS_FILE_NAME.into(), state: os_engine::effects::maximus::state::State::new_default().to_bytes() }
     } else {
-        os_model::SlotPlugin { name: name.into(), state: Vec::new() }
+        os_model::SlotPlugin { id: os_model::Id::NONE, name: name.into(), state: Vec::new() }
     }
 }
 /// File (in the user folder) remembering which native plugins passed the child-process check.
 const NATIVE_CHECKS: &str = "native-checks.txt";
 /// The sampler parameter a note's sample start modulates per note (Lemon Sampler's START OFFSET).
 const SAMPLE_START: &str = "Sample start offset";
+/// Lemon Sampler's hidden parameter an audio clip voice's end modulates per note.
+const CLIP_END: &str = "Clip end";
 
 /// Lemon Sampler's starting state for a sampler channel of the project: its sample, its five envelope records, its
 /// stretch settings, the sample's start, length, loop points, loop options and precomputed effects, the channel
@@ -1764,7 +2057,7 @@ pub fn sampler_state(ch: &os_model::Channel) -> Vec<u8> {
 /// happen (`params_tick`).
 pub fn store_sampler(ch: &mut os_model::Channel, state: &[u8]) {
     use lemon_sampler::params as sp;
-    let json = state.get(8..).filter(|_| state.len() > 8 && state[0] != b'{').unwrap_or(state);
+    let (_, json) = state_json(state);
     let Ok(v) = serde_json::from_slice::<serde_json::Value>(json) else { return };
     let Some(params) = v.get("params").and_then(|p| p.as_object()) else { return };
     let f = |id: &str| params.get(id)?.get("f32")?.as_f64().map(|x| x as f32);
@@ -2083,7 +2376,7 @@ fn sample_params(sound: &os_model::ChannelSound, clip: bool) -> Vec<(&'static st
         ("f_cut", f(sound.cutoff.clamp(0, 256) as f32 / 256.0)),
         ("f_res", f(sound.resonance.clamp(0, 256) as f32 / 256.0)),
         ("f_type", json!({ "i32": sound.filter_type.clamp(0, 7) })),
-        // Lemon Sampler's list holds modes 0 to 5: mode 6 (valid only as stored data) plays as mode 0 (Lemon Studio).
+        // Lemon Sampler's list holds modes 0 to 5: mode 6 (valid only as stored data) plays as mode 0 (AQUILA).
         ("declick", json!({ "i32": if sound.declick <= 5 { i32::from(sound.declick) } else { 0 } })),
     ];
     match sound.sampler_flags {
@@ -2118,8 +2411,7 @@ pub fn stretch_param(name: &str, norm: f64, stretch: &mut [u32; 4]) -> bool {
 
 /// `blob` (a Lemon Sampler state) with parameters set to the given JSON values.
 pub(crate) fn with_params(blob: &[u8], set: &[(&str, serde_json::Value)]) -> Option<Vec<u8>> {
-    let prefixed = blob.len() > 8 && blob[0] != b'{';
-    let json = if prefixed { &blob[8..] } else { blob };
+    let (prefixed, json) = state_json(blob);
     let mut v: serde_json::Value = serde_json::from_slice(json).ok()?;
     let params = v.get_mut("params")?.as_object_mut()?;
     for (k, val) in set {
@@ -2132,8 +2424,7 @@ pub(crate) fn with_params(blob: &[u8], set: &[(&str, serde_json::Value)]) -> Opt
 }
 
 pub(crate) fn with_sample_path(blob: &[u8], path: &str) -> Option<Vec<u8>> {
-    let prefixed = blob.len() > 8 && blob[0] != b'{';
-    let json = if prefixed { &blob[8..] } else { blob };
+    let (prefixed, json) = state_json(blob);
     let mut v: serde_json::Value = serde_json::from_slice(json).ok()?;
     let inner = serde_json::to_string(path).ok()?;
     v.get_mut("fields")?.as_object_mut()?.insert("sample-path".into(), serde_json::Value::String(inner));
@@ -2213,9 +2504,10 @@ fn post_drop(x: i32, y: i32, path: &str, frame: isize) -> bool {
 }
 
 /// The `sample-path` field of a Lemon Sampler (or Lemon Trio) state blob.
+pub(crate) use os_hostlink::state::json as state_json;
+
 pub(crate) fn sample_path_of(blob: &[u8]) -> Option<String> {
-    let json = blob.get(8..).filter(|_| blob.len() > 8 && blob[0] != b'{').unwrap_or(blob);
-    let v: serde_json::Value = serde_json::from_slice(json).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(state_json(blob).1).ok()?;
     let field = v.get("fields")?.get("sample-path")?.as_str()?;
     serde_json::from_str::<String>(field).ok()
 }
@@ -2306,7 +2598,7 @@ mod tests {
         let mut pl = Plugins { available: builtin(), scale: 1.5, rate: 48000, ..Plugins::default() };
         let index = pl.index_of(LEMON_SAMPLER).expect("built-in Lemon Sampler");
         pl.create_with(0, index, None).unwrap();
-        let info = ChannelInfo { name: LEMON_SAMPLER.into(), target: "Insert 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None };
+        let info = ChannelInfo { name: LEMON_SAMPLER.into(), target: "Bus 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None, icon: None };
         pl.open_window(0, info).unwrap();
         pump(&mut pl, 200);
         let w = pl.hosted[&0].window.as_ref().unwrap();
@@ -2338,7 +2630,7 @@ mod tests {
         let desc = lib.plugins[0].clone();
         let mut pl = Plugins { available: vec![Available { lib, desc }], scale: 1.0, ..Plugins::default() };
         pl.create(0, 0).unwrap();
-        let info = ChannelInfo { name: "ML Sampler".into(), target: "Insert 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None };
+        let info = ChannelInfo { name: "ML Sampler".into(), target: "Bus 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None, icon: None };
         pl.open_window(0, info).unwrap();
         pump(&mut pl, 400);
         let hwnd = pl.hosted[&0].window.as_ref().unwrap().hwnd();
@@ -2367,7 +2659,7 @@ mod tests {
         let index = pl.effect_index(LEMON_EQ).expect("built-in EQ");
         pl.create_effect(1, 0, index, None).unwrap();
         let key = fx_key(1, 0);
-        let info = ChannelInfo { name: LEMON_EQ.into(), target: "Insert 1".into(), enabled: true, volume: 0.8, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None };
+        let info = ChannelInfo { name: LEMON_EQ.into(), target: "Bus 1".into(), enabled: true, volume: 0.8, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None, icon: None };
         pl.open_window(key, info).unwrap();
         pump(&mut pl, 400);
         let frame = pl.hosted[&key].window.as_ref().unwrap().hwnd();
@@ -2393,7 +2685,7 @@ mod tests {
         let mut pl = Plugins { available: builtin(), scale: 1.0, rate: 48000, ..Plugins::default() };
         let index = pl.index_of(crate::osc3::LEMON_TRIO).expect("built-in Lemon Trio");
         pl.create_with(0, index, None).unwrap();
-        let info = ChannelInfo { name: crate::osc3::LEMON_TRIO.into(), target: "Insert 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None };
+        let info = ChannelInfo { name: crate::osc3::LEMON_TRIO.into(), target: "Bus 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None, icon: None };
         pl.open_window(0, info).unwrap();
         pump(&mut pl, 400);
         let frame = pl.hosted[&0].window.as_ref().unwrap().hwnd();
@@ -2445,7 +2737,7 @@ mod tests {
         let mut pl = Plugins { available: builtin(), scale: 1.0, rate: 48000, ..Plugins::default() };
         let index = pl.index_of(crate::citrus::CITRUS).expect("built-in Citrus");
         pl.create_with(0, index, None).unwrap();
-        let info = ChannelInfo { name: crate::citrus::CITRUS.into(), target: "Insert 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None };
+        let info = ChannelInfo { name: crate::citrus::CITRUS.into(), target: "Bus 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None, icon: None };
         pl.open_window(0, info).unwrap();
         pump(&mut pl, 400);
         let frame = pl.hosted[&0].window.as_ref().unwrap().hwnd();
@@ -2474,6 +2766,46 @@ mod tests {
         assert_ne!(std::fs::read(&a).unwrap(), std::fs::read(&b).unwrap(), "the editor redrew");
     }
 
+    /// The built-in Smith's editor in its window: the wheel on LEVEL and a click on the filter's HP edit the Ogun state
+    /// the channel saves (spec: plugins/smith.md).
+    /// `OS_SHOT_DIR=.. cargo test -p os-app --bin lemonstudio smith_window_edits -- --ignored`
+    #[test]
+    #[ignore]
+    fn smith_window_edits() {
+        let Some(dir) = std::env::var_os("OS_SHOT_DIR") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        let mut pl = Plugins { available: builtin(), scale: 1.0, rate: 48000, ..Plugins::default() };
+        let index = pl.index_of(crate::smith::SMITH).expect("built-in Smith");
+        pl.create_with(0, index, None).unwrap();
+        let info = ChannelInfo { name: crate::smith::SMITH.into(), target: "Bus 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None, icon: None };
+        pl.open_window(0, info).unwrap();
+        pump(&mut pl, 400);
+        let frame = pl.hosted[&0].window.as_ref().unwrap().hwnd();
+        let editor = unsafe { GetWindow(GetWindow(frame as HWND, GW_CHILD), GW_CHILD) } as isize;
+        assert!(editor != 0, "the editor is a child of the frame");
+        let mut er: RECT = unsafe { std::mem::zeroed() };
+        unsafe { GetWindowRect(editor as HWND, &mut er) };
+        assert_eq!((er.right - er.left, er.bottom - er.top), (smith::view::W as i32, smith::view::H as i32));
+        let (a, b) = (dir.join("smith_before.bmp"), dir.join("smith_after.bmp"));
+        capture(frame, &a);
+        // The default patch saves no state until it is edited.
+        assert_eq!(pl.ogun_file_state(0), Some(Vec::new()));
+        for _ in 0..3 {
+            let (sx, sy) = (er.left + 21, er.top + 38);
+            unsafe { SendMessageW(editor as HWND, WM_MOUSEWHEEL, (120usize) << 16, ((sx & 0xffff) | (sy << 16)) as isize) };
+            pump(&mut pl, 60);
+        }
+        let (cx, cy) = (541isize, 109isize);
+        unsafe { SendMessageW(editor as HWND, WM_LBUTTONDOWN, 0, cx | (cy << 16)) };
+        unsafe { SendMessageW(editor as HWND, WM_LBUTTONUP, 0, cx | (cy << 16)) };
+        pump(&mut pl, 300);
+        capture(frame, &b);
+        let st = smith::state::State::from_bytes(&pl.ogun_file_state(0).expect("an Ogun state")).expect("an edited state");
+        assert_eq!(st.ints[smith::state::LEVEL], 160 + 3 * 8, "three wheel notches of 8");
+        assert_eq!(st.ints[smith::state::F_TYPE], 3, "the high pass");
+        assert_ne!(std::fs::read(&a).unwrap(), std::fs::read(&b).unwrap(), "the editor redrew");
+    }
+
     /// Random clicks, drags and wheel turns on the editor; a probe toggle must keep changing the plugin state.
     /// `OS_SHOT_DIR=.. OS_CLAP=.. cargo test -p os-app plugin_editor_stress -- --ignored --nocapture`
     #[test]
@@ -2486,7 +2818,7 @@ mod tests {
         let desc = lib.plugins[0].clone();
         let mut pl = Plugins { available: vec![Available { lib, desc }], scale: 1.0, ..Plugins::default() };
         pl.create(0, 0).unwrap();
-        let info = ChannelInfo { name: "ML Sampler".into(), target: "Insert 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None };
+        let info = ChannelInfo { name: "ML Sampler".into(), target: "Bus 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None, icon: None };
         pl.open_window(0, info).unwrap();
         pump(&mut pl, 300);
         let frame = pl.hosted[&0].window.as_ref().unwrap().hwnd();
@@ -2577,7 +2909,7 @@ mod tests {
         let desc = lib.plugins[0].clone();
         let mut pl = Plugins { available: vec![Available { lib, desc }], scale: 1.0, ..Plugins::default() };
         pl.create(0, 0).unwrap();
-        let info = ChannelInfo { name: "ML Sampler".into(), target: "Insert 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None };
+        let info = ChannelInfo { name: "ML Sampler".into(), target: "Bus 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None, icon: None };
         pl.open_window(0, info).unwrap();
         pump(&mut pl, 300);
         let frame = pl.hosted[&0].window.as_ref().unwrap().hwnd();
@@ -2651,11 +2983,11 @@ mod tests {
         let desc = lib.plugins[0].clone();
         let mut pl = Plugins { available: vec![Available { lib, desc }], scale: 1.0, ..Plugins::default() };
         pl.create(0, 0).unwrap();
-        let info = ChannelInfo { name: "ML Sampler".into(), target: "Insert 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None };
+        let info = ChannelInfo { name: "ML Sampler".into(), target: "Bus 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None, icon: None };
         pl.open_window(0, info).unwrap();
         pump(&mut pl, 300);
         // A bright 2 s saw so a low-pass is audible.
-        let wav = std::env::temp_dir().join("os-app-knob-sound.wav");
+        let wav = std::env::temp_dir().join(format!("os-app-knob-sound-{}.wav", std::process::id()));
         let tone: Vec<f32> = (0..88200).flat_map(|i| { let v = ((i as f32 / 44100.0 * 220.0).fract() * 2.0 - 1.0) * 0.4; [v, v] }).collect();
         os_engine::wav::write_f32_stereo(&mut std::fs::File::create(&wav).unwrap(), 44100, &tone).unwrap();
         // The persisted field is a JSON string holding JSON: forward slashes keep it free of escapes.
@@ -2734,11 +3066,11 @@ mod tests {
         let desc = lib.plugins[0].clone();
         let mut pl = Plugins { available: vec![Available { lib, desc }], scale: 1.0, ..Plugins::default() };
         pl.create(0, 0).unwrap();
-        let info = ChannelInfo { name: "ML Sampler".into(), target: "Insert 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None };
+        let info = ChannelInfo { name: "ML Sampler".into(), target: "Bus 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None, icon: None };
         pl.open_window(0, info).unwrap();
         pump(&mut pl, 300);
         // A bright 2 s saw so a low-pass is audible.
-        let wav = std::env::temp_dir().join("os-app-knob-sound.wav");
+        let wav = std::env::temp_dir().join(format!("os-app-app-knob-sound-{}.wav", std::process::id()));
         let tone: Vec<f32> = (0..88200).flat_map(|i| { let v = ((i as f32 / 44100.0 * 220.0).fract() * 2.0 - 1.0) * 0.4; [v, v] }).collect();
         os_engine::wav::write_f32_stereo(&mut std::fs::File::create(&wav).unwrap(), 44100, &tone).unwrap();
         // The persisted field is a JSON string holding JSON: forward slashes keep it free of escapes.
@@ -2820,7 +3152,7 @@ mod tests {
         let name = desc.name.clone();
         let mut pl = Plugins { available: vec![Available { lib, desc }], scale: 1.0, ..Plugins::default() };
         pl.create(0, 0).unwrap();
-        let info = ChannelInfo { name, target: "Insert 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None };
+        let info = ChannelInfo { name, target: "Bus 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None, icon: None };
         pl.open_window(0, info).unwrap();
         pump(&mut pl, 300);
         let frame = pl.hosted[&0].window.as_ref().unwrap().hwnd();
@@ -2876,7 +3208,7 @@ mod tests {
         let name = desc.name.clone();
         let mut pl = Plugins { available: vec![Available { lib, desc }], scale: monitor, rate: 48000, ..Plugins::default() };
         pl.create(0, 0).unwrap();
-        let info = ChannelInfo { name: name.clone(), target: "Insert 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None };
+        let info = ChannelInfo { name: name.clone(), target: "Bus 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None, icon: None };
         pl.open_window(0, info).unwrap();
         pump(&mut pl, 500);
         let size = |h: HWND| unsafe {
@@ -3433,7 +3765,7 @@ mod tests {
         let index = pl.index_of(LEMON_SAMPLER).unwrap();
         pl.create_with(0, index, None).unwrap();
         // One second: silent first half, 0.5 in the second.
-        let wav = std::env::temp_dir().join("os-app-start-late.wav");
+        let wav = std::env::temp_dir().join(format!("os-app-start-late-{}.wav", std::process::id()));
         let frames: Vec<f32> = (0..48000).flat_map(|i| if i < 24000 { [0.0; 2] } else { [0.5; 2] }).collect();
         os_engine::wav::write_f32_stereo(&mut std::fs::File::create(&wav).unwrap(), 48000, &frames).unwrap();
         assert!(pl.load_sample(0, &wav.to_string_lossy()));
@@ -3469,7 +3801,7 @@ mod tests {
         use windows_sys::Win32::Foundation::RECT;
         let mut pl = Plugins { available: builtin(), scale: 1.0, rate: 48000, ..Plugins::default() };
         pl.create(0, pl.index_of(LEMON_SAMPLER).unwrap()).unwrap();
-        let info = ChannelInfo { name: "ML Sampler".into(), target: "Insert 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None };
+        let info = ChannelInfo { name: "ML Sampler".into(), target: "Bus 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None, icon: None };
         pl.open_window(0, info).unwrap();
         pump(&mut pl, 300);
         let frame = pl.hosted[&0].window.as_ref().unwrap().hwnd();
@@ -3486,7 +3818,7 @@ mod tests {
         pump(&mut pl, 300);
         assert_eq!(pl.sampler_path(0).as_deref(), Some(mp3.as_str()));
         // The strip (no editor under the point): loaded through the state instead.
-        let wav = std::env::temp_dir().join("os-app-drop.wav");
+        let wav = std::env::temp_dir().join(format!("os-app-drop-{}.wav", std::process::id()));
         os_engine::wav::write_f32_stereo(&mut std::fs::File::create(&wav).unwrap(), 44100, &[0.5; 2000]).unwrap();
         let wav = wav.to_string_lossy().into_owned();
         assert!(pl.drop_file(0, r.left + 12, r.top + 40, &wav, true));
@@ -3523,7 +3855,7 @@ mod tests {
         let d = pl.descriptor(0).unwrap();
         assert_eq!(d.format, os_host::Format::Vst3);
         assert!(d.uid().starts_with("vst3:") && d.uid().len() == 5 + 32);
-        let wav = std::env::temp_dir().join("os-app-vst3.wav");
+        let wav = std::env::temp_dir().join(format!("os-app-vst3-{}.wav", std::process::id()));
         os_engine::wav::write_f32_stereo(&mut std::fs::File::create(&wav).unwrap(), 48000, &[0.5; 9600]).unwrap();
         // A VST3 instance takes a bare component state too (here Lemon Sampler's JSON with the sample).
         let json = format!("{{\"version\":\"0.0.1\",\"params\":{{}},\"fields\":{{\"sample-path\":{}}}}}", json_string(&json_string(&wav.to_string_lossy())));
@@ -3550,7 +3882,7 @@ mod tests {
             Available { desc: lib.plugins()[0].clone(), lib }
         };
         let path = std::env::temp_dir().join(format!("openstudio-vst3-{}.flp", std::process::id()));
-        let wav = std::env::temp_dir().join("os-app-vst3-save.wav");
+        let wav = std::env::temp_dir().join(format!("os-app-vst3-save-{}.wav", std::process::id()));
         os_engine::wav::write_f32_stereo(&mut std::fs::File::create(&wav).unwrap(), 48000, &[0.25; 4800]).unwrap();
         let mut a = crate::app::App::new(None);
         a.state.project = crate::app::test_project();
@@ -3563,7 +3895,7 @@ mod tests {
         a.state.hosted_rows.push(row);
         let json = format!("{{\"version\":\"0.0.1\",\"params\":{{}},\"fields\":{{\"sample-path\":{}}}}}", json_string(&json_string(&wav.to_string_lossy())));
         assert!(a.plugins.set_state(row, json.as_bytes()));
-        a.state.project.mixer[3].slots[2] = Some(os_model::SlotPlugin { name: "ML EQ".into(), state: Vec::new() });
+        a.state.project.mixer[3].slots[2] = Some(os_model::SlotPlugin { id: os_model::Id::NONE, name: "ML EQ".into(), state: Vec::new() });
         a.plugins.create_effect(3, 2, 0, None).unwrap();
         // An edit of the effect, through the hosting layer, flushed into its processor.
         {
@@ -3629,7 +3961,7 @@ mod tests {
                 pl.create(0, 0).unwrap();
                 0
             };
-            let info = ChannelInfo { name: name.clone(), target: "Insert 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None };
+            let info = ChannelInfo { name: name.clone(), target: "Bus 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None, icon: None };
             pl.open_window(key, info).unwrap();
             let frame = pl.hosted[&key].window.as_ref().unwrap().hwnd();
             unsafe { SetWindowPos(frame as HWND, std::ptr::null_mut(), -20000, -20000, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE) };
@@ -3660,7 +3992,7 @@ mod tests {
             let mut pl = Plugins { scale: 1.0, rate: 48000, effects: vec![a], ..Plugins::default() };
             pl.create_effect(1, 0, 0, None).unwrap();
             let key = fx_key(1, 0);
-            let info = ChannelInfo { name: name.into(), target: "Insert 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None };
+            let info = ChannelInfo { name: name.into(), target: "Bus 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None, icon: None };
             for round in 0..2 {
                 pl.open_window(key, info.clone()).unwrap();
                 let frame = pl.hosted[&key].window.as_ref().unwrap().hwnd();
@@ -3726,7 +4058,7 @@ mod tests {
             })
         };
         eprintln!("STEP window");
-        let info = ChannelInfo { name: name.clone(), target: "Insert 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None };
+        let info = ChannelInfo { name: name.clone(), target: "Bus 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None, icon: None };
         match pl.open_window(key, info) {
             Ok(()) => {
                 let frame = pl.hosted[&key].window.as_ref().unwrap().hwnd();
@@ -3823,9 +4155,9 @@ mod tests {
         a.state.plugdb.rebuild(&a.plugins);
         use crate::plugin_menu::PlugCmd;
         let fx = a.plugins.effects.iter().position(|e| e.desc.format == os_host::Format::Native).expect("a native effect");
-        let fx_menu = crate::mixer::effect_menu(&a.state, 0, 0.0, 0.0);
+        let fx_menu = crate::plugin_menu::items(&a.state, crate::plugin_menu::Target::Fx(Some(0)), true);
         let fx_cmd = crate::playlist::Cmd::Plugin(PlugCmd::Effect { index: fx, slot: Some(0) });
-        assert!(fx_menu.items.iter().any(|it| it.cmd == fx_cmd), "slot menu lists it");
+        assert!(fx_menu.iter().any(|it| it.cmd == fx_cmd), "the slot's list has it");
         let pick = a.plugins.available.iter().position(|x| x.desc.name == name).expect("the plugin is found");
         let add = crate::rack::add_one_items(&a.state).into_iter().find(|it| it.label == name).expect("Add one lists it");
         assert!(add.cmd == crate::playlist::Cmd::Plugin(PlugCmd::Generator { index: pick, after: None }));
@@ -3920,7 +4252,7 @@ mod tests {
             (held, tail, finite)
         });
         eprintln!("STEP window");
-        let info = ChannelInfo { name: name.clone(), target: "Insert 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None };
+        let info = ChannelInfo { name: name.clone(), target: "Bus 1".into(), enabled: true, volume: 0.78, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None, icon: None };
         match pl.open_window(0, info) {
             Ok(()) => {
                 let frame = pl.hosted[&0].window.as_ref().unwrap().hwnd();
@@ -4165,7 +4497,7 @@ mod tests {
         let engine = fx.clone();
         std::thread::spawn(move || engine.lock().unwrap().process_fx(48000, &mut [0.5; 8], &mut [0.5; 8])).join().unwrap();
         let told: Vec<String> = pl.idle(|_| None).into_iter().filter_map(|r| if let Request::Stopped(k, t) = r { Some(format!("{k}: {t}")) } else { None }).collect();
-        assert_eq!(told, [format!("{key}: Faulty stopped after a memory error: its slot passes the sound through. Save your project and restart ML Studio to use it again")]);
+        assert_eq!(told, [format!("{key}: Faulty stopped after a memory error: its slot passes the sound through. Save your project and restart AQUILA to use it again")]);
         assert!(!pl.idle(|_| None).iter().any(|r| matches!(r, Request::Stopped(..))), "told once");
         let (mut l, mut r) = ([0.5f32; 8], [0.5f32; 8]);
         fx.lock().unwrap().process_fx(48000, &mut l, &mut r);
@@ -4198,7 +4530,7 @@ mod tests {
             for i in 0..pl.effects.len() {
                 pl.create_effect(1, i as u8, i, None).unwrap();
                 let name = pl.effects[i].desc.name.clone();
-                let info = ChannelInfo { name, target: "Insert 1".into(), enabled: true, volume: 0.8, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None };
+                let info = ChannelInfo { name, target: "Bus 1".into(), enabled: true, volume: 0.8, pan: 0.0, pitch_cents: 0, range: 2, track: 1, max_track: 125, misc: None, icon: None };
                 pl.open_window(fx_key(1, i as u8), info).unwrap();
                 transport.set_effects(pl.effects());
                 pump(&mut pl, 400);
@@ -4215,7 +4547,7 @@ mod tests {
         transport.stop();
     }
 
-    /// The four plugin window checks as found in FL; "Detach all new plugins": an instance the user adds takes the
+    /// The four plugin window checks as found in FL; "Open new plugin windows floating": an instance the user adds takes the
     /// check's state as its window mode, one that exists keeps its own (spec: ui/settings-choices.md "Miscellaneous:
     /// naming, detached plugins and startup").
     #[test]
@@ -4256,7 +4588,7 @@ mod tests {
     fn editor_limit_and_reopen_place() {
         let mut pl = Plugins { effects: builtin_effects(), scale: 1.0, rate: 48000, ..Plugins::default() };
         let index = pl.effect_index(LEMON_EQ).expect("built-in EQ");
-        let info = |t: u16| ChannelInfo { name: LEMON_EQ.into(), target: format!("Insert {t}"), enabled: true, volume: 0.8, pan: 0.0, pitch_cents: 0, range: 2, track: t, max_track: 125, misc: None };
+        let info = |t: u16| ChannelInfo { name: LEMON_EQ.into(), target: format!("Bus {t}"), enabled: true, volume: 0.8, pan: 0.0, pitch_cents: 0, range: 2, track: t, max_track: 125, misc: None, icon: None };
         let keys: Vec<usize> = (0..26u16).map(|i| fx_key(1 + i / 8, (i % 8) as u8)).collect();
         for &k in &keys {
             let (t, s) = fx_of(k).unwrap();
@@ -4391,5 +4723,134 @@ mod chop_drop_tests {
         p.idle(|_|None);assert_eq!(p.pending_scales.get(&0),Some(&2.));
         p.defer_editor_scale=false;p.idle(|_|None);assert!(p.pending_scales.is_empty());
         p.pending_scales.insert(0,1.5);p.drop_key(0);assert!(p.pending_scales.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod slot_tests {
+    use super::*;
+
+    /// A state's length prefix is told by its value: one whose low byte is `{` (a 0x7B-byte JSON) still counts, and a
+    /// bare JSON state is read whole.
+    #[test]
+    fn a_state_prefix_is_told_by_its_length() {
+        let with = |path: &str| format!(r#"{{"fields":{{"sample-path":"\"{path}\""}}}}"#);
+        let path = "a".repeat(0x7B - with("").len());
+        let json = with(&path);
+        assert_eq!(json.len(), 0x7B);
+        let mut blob = (json.len() as u64).to_le_bytes().to_vec();
+        blob.extend_from_slice(json.as_bytes());
+        assert_eq!(blob[0], b'{');
+        assert_eq!(state_json(&blob), (true, json.as_bytes()));
+        assert_eq!(sample_path_of(&blob), Some(path.clone()));
+        assert_eq!(state_json(json.as_bytes()), (false, json.as_bytes()));
+        assert_eq!(sample_path_of(json.as_bytes()), Some(path));
+    }
+
+    /// An instance whose holds are short is taken at once, or skipped; those with long holds wait, all of them together
+    /// no longer than the budget: a project with many instances keeps its frame rate during playback.
+    #[test]
+    fn the_ui_waits_little_for_many_instances() {
+        let meter = os_host::Meter::default();
+        // Mid-block: just processed a while ago, not yet idle.
+        meter.add(Duration::ZERO);
+        std::thread::sleep(Duration::from_millis(2));
+        let fast = std::sync::Mutex::new(());
+        let t0 = Instant::now();
+        assert!(lock_for_tick(&fast, Some(&meter)).is_some(), "short holds: taken at once");
+        assert!(t0.elapsed() < Duration::from_millis(2));
+        meter.note_hold(Duration::from_millis(3));
+        assert!(meter.holds_long());
+        let t0 = Instant::now();
+        for _ in 0..30 {
+            assert!(lock_for_tick(&fast, Some(&meter)).is_none(), "not between blocks");
+        }
+        assert!(t0.elapsed() < Duration::from_millis(16), "{:?}: the budget, not 30 waits", t0.elapsed());
+    }
+
+    /// A long hold is remembered for a while, then fades.
+    #[test]
+    fn a_long_hold_fades() {
+        let m = os_host::Meter::default();
+        assert!(!m.holds_long());
+        m.note_hold(Duration::from_millis(2));
+        for _ in 0..100 {
+            m.note_hold(Duration::from_micros(50));
+        }
+        assert!(m.holds_long(), "still slow");
+        for _ in 0..400 {
+            m.note_hold(Duration::from_micros(50));
+        }
+        assert!(!m.holds_long(), "faded");
+    }
+
+    /// A UI call holding a plugin 3 ms every 40 ms beside an audio thread that processes it every 5.33 ms (256 frames at
+    /// 48 kHz) and gives up after waiting 2 ms, as the engine does: taken at any moment it makes the plugin late now and
+    /// then; taken between two blocks (`lock_between_blocks`), never. Timing on the real clock for 3 s per way:
+    /// `cargo test -p os-app --bin lemonstudio long_ui_calls_between_blocks -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn long_ui_calls_between_blocks_make_no_plugin_late() {
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+        use std::sync::{Arc, Mutex};
+        fn run(between: bool) -> u32 {
+            let plugin = Arc::new(Mutex::new(()));
+            let meter = Arc::new(os_host::Meter::default());
+            let (late, stop) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicBool::new(false)));
+            let audio = {
+                let (plugin, meter, late, stop) = (plugin.clone(), meter.clone(), late.clone(), stop.clone());
+                std::thread::spawn(move || {
+                    let (period, start) = (Duration::from_micros(5333), Instant::now());
+                    for n in 1u32.. {
+                        if stop.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        let waited = Instant::now();
+                        let got = loop {
+                            match plugin.try_lock() {
+                                Ok(g) => break Some(g),
+                                Err(_) if waited.elapsed() >= Duration::from_millis(2) => break None,
+                                Err(_) => std::thread::yield_now(),
+                            }
+                        };
+                        match got {
+                            Some(_g) => {
+                                let t0 = Instant::now();
+                                while t0.elapsed() < Duration::from_micros(800) {
+                                    std::hint::spin_loop();
+                                }
+                                meter.add(t0.elapsed());
+                            }
+                            None => {
+                                late.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        let next = start + period * n;
+                        if let Some(d) = next.checked_duration_since(Instant::now()) {
+                            std::thread::sleep(d);
+                        }
+                    }
+                })
+            };
+            // Playing already: before its first block nothing processes the instance (`since_processed` is `None`).
+            while meter.since_processed().is_none() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let t0 = Instant::now();
+            while t0.elapsed() < Duration::from_secs(3) {
+                let g = if between { lock_between_blocks(&plugin, Some(&meter), STATE_WAIT) } else { plugin.lock().ok() };
+                if let Some(_g) = g {
+                    std::thread::sleep(Duration::from_millis(3));
+                }
+                std::thread::sleep(Duration::from_millis(40));
+            }
+            stop.store(true, Ordering::Relaxed);
+            audio.join().unwrap();
+            late.load(Ordering::Relaxed)
+        }
+        let (any, between) = (run(false), run(true));
+        println!("late blocks in 3 s: {any} with the lock taken at any moment, {between} between blocks");
+        assert!(any > 0, "the plain lock makes it late (else the test shows nothing)");
+        assert_eq!(between, 0);
     }
 }

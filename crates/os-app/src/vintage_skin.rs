@@ -23,7 +23,7 @@ pub(crate) fn directories() -> Vec<PathBuf> {
     }
     // Keep the existing shared cache used by Windows development and regular profiles.
     if let Some(p) = std::env::var_os("LOCALAPPDATA") {
-        paths.push(PathBuf::from(p).join("Lemon Studio/Skins/FL4"));
+        paths.push(PathBuf::from(p).join("AQUILA/Skins/FL4"));
     }
     for var in ["ProgramFiles(x86)", "ProgramFiles"] {
         if let Some(p) = std::env::var_os(var) {

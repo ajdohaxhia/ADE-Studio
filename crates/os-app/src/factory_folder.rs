@@ -12,7 +12,7 @@
 //!
 //! The group shows Reset (greyed while nothing is chosen), the folder button and the folder in use; the folder button
 //! and the path open a folder picker. A change reaches the playing engines and the hosted Lemon Samplers at once.
-// spec: flp/sample-paths.md "For Lemon Studio"
+// spec: flp/sample-paths.md "For AQUILA"
 
 use std::path::PathBuf;
 

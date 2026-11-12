@@ -15,9 +15,12 @@ pub mod cleanup;
 pub mod cleanup_link;
 pub mod doc;
 pub mod editor;
+pub mod env;
 pub mod peaks;
 pub mod rec;
+pub mod restore;
 pub mod sample;
+pub mod spectral;
 pub mod spectrum;
 pub mod state;
 pub mod tools;
@@ -73,12 +76,20 @@ pub struct Shared {
     published_ver: AtomicU64,
     /// Samples the audio thread let go of (freed here, not on the audio thread).
     retired: Mutex<Vec<Arc<Sample>>>,
+    /// The envelopes as playback hears them, the envelopes and sample version they were made from, a counter bumped
+    /// with each, and the ones the audio thread let go of.
+    published_env: Mutex<Arc<env::Playback>>,
+    env_key: Mutex<(env::Envs, u64)>,
+    env_ver: AtomicU64,
+    retired_env: Mutex<Vec<Arc<env::Playback>>>,
     cmds: Mutex<Vec<Cmd>>,
     /// Playback, as of the audio thread's last block: playing, and the position in frames (f64 bits).
     pub playing: AtomicBool,
     pub pos: AtomicU64,
     /// The input's peak over the last block (f32 bits).
     pub level: AtomicU32,
+    /// The host's tempo as of the last block (f64 bits; 0 = not given).
+    pub tempo: AtomicU64,
     /// The recording settings (the editor and the audio thread read them every block).
     pub when: AtomicU8,
     pub max: AtomicU8,
@@ -111,6 +122,8 @@ impl Default for Shared {
         let s = Shared {
             published: Mutex::new(d.sample.clone()),
             published_ver: AtomicU64::new(d.version),
+            published_env: Mutex::new(Arc::new(env::Playback::new(&d.env, d.frames(), d.sample.channels()))),
+            env_key: Mutex::new((d.env.clone(), d.version)),
             doc: Mutex::new(d),
             cleanup_link: Mutex::new(None),
             preview: Mutex::new(None),
@@ -118,10 +131,13 @@ impl Default for Shared {
             cleanup_audition:AtomicBool::new(false),
             host_rate: AtomicU32::new(44100),
             retired: Mutex::new(Vec::with_capacity(64)),
+            env_ver: AtomicU64::new(0),
+            retired_env: Mutex::new(Vec::with_capacity(64)),
             cmds: Mutex::new(Vec::with_capacity(64)),
             playing: AtomicBool::new(false),
             pos: AtomicU64::new(0f64.to_bits()),
             level: AtomicU32::new(0),
+            tempo: AtomicU64::new(0),
             when: AtomicU8::new(state::WHEN_ON_INPUT),
             max: AtomicU8::new(5),
             append: AtomicBool::new(true),
@@ -163,7 +179,20 @@ impl Shared {
             }
             self.published_ver.store(d.version, Ordering::Release);
         }
+        // The envelopes heard while playing follow the document's envelopes and sample.
+        if let Ok(mut k) = self.env_key.lock() {
+            if k.1 != d.version || k.0 != d.env {
+                *k = (d.env.clone(), d.version);
+                if let Ok(mut p) = self.published_env.lock() {
+                    *p = Arc::new(env::Playback::new(&d.env, d.frames(), d.sample.channels()));
+                }
+                self.env_ver.fetch_add(1, Ordering::AcqRel);
+            }
+        }
         if let Ok(mut r) = self.retired.lock() {
+            r.clear();
+        }
+        if let Ok(mut r) = self.retired_env.lock() {
             r.clear();
         }
     }
@@ -187,8 +216,10 @@ impl Shared {
         self.mute.store(r.mute, Ordering::Relaxed);
         self.ignore_host_sel.store(v.ignore_host_sel, Ordering::Relaxed);
         self.ignore_own_sel.store(v.ignore_own_sel, Ordering::Relaxed);
-        if v.w >= view::MIN_W && v.h >= view::MIN_H {
-            self.size.0.store(v.w, Ordering::Relaxed);
+        // A size saved when the smallest width was still 680 opens at today's smallest (the tool grid grew,
+        // 2026-11-05); smaller sizes are not Tesla's and leave the default.
+        if v.w >= OLD_MIN_W && v.h >= view::MIN_H {
+            self.size.0.store(v.w.max(view::MIN_W), Ordering::Relaxed);
             self.size.1.store(v.h, Ordering::Relaxed);
         }
     }
@@ -236,7 +267,8 @@ impl Shared {
         self.loaded.fetch_add(1, Ordering::AcqRel);
     }
 
-    /// Moves recorded frames from the ring into the take; once disarmed, the take joins the document (appended, or
+    /// Moves recorded frames from the ring into the take, which keeps only its last frames up to the For limit (a
+    /// rolling log, as Edison "wraps and overwrites"); once disarmed, the take joins the document (appended, or
     /// replacing the sample with Append off). Called by the drain thread every 10 ms.
     pub fn drain(&self) {
         let mut t = self.take.lock().unwrap_or_else(|e| e.into_inner());
@@ -246,6 +278,12 @@ impl Shared {
         let mut l = std::mem::take(&mut t.l);
         let mut r = std::mem::take(&mut t.r);
         let n = self.ring.drain(&mut l, &mut r);
+        let limit = rec::Recorder::limit_frames(self.max.load(Ordering::Relaxed), t.rate.max(1));
+        if l.len() as u64 > limit {
+            let over = l.len() - limit as usize;
+            l.drain(..over);
+            r.drain(..over);
+        }
         t.l = l;
         t.r = r;
         if n > 0 {
@@ -333,6 +371,10 @@ struct Player {
     sample: Option<Arc<Sample>>,
     ver: u64,
     preview_ver: u64,
+    /// The envelopes heard while playing, their version, and the last heights with their matrix.
+    env: Option<Arc<env::Playback>>,
+    env_ver: u64,
+    env_last: Option<((f32, f32, f32), [[f64; 2]; 2])>,
     playing: bool,
     pos: f64,
     from: usize,
@@ -348,6 +390,19 @@ struct Player {
 impl Player {
     /// Takes the newest published sample (the one it lets go of is freed off the audio thread).
     fn sync(&mut self, s: &Shared) {
+        let ev = s.env_ver.load(Ordering::Acquire);
+        if ev != self.env_ver || self.env.is_none() {
+            if let Ok(p) = s.published_env.try_lock() {
+                let old = self.env.replace(p.clone());
+                self.env_ver = ev;
+                self.env_last = None;
+                if let (Some(old), Ok(mut r)) = (old, s.retired_env.try_lock()) {
+                    if r.len() < r.capacity() {
+                        r.push(old);
+                    }
+                }
+            }
+        }
         let v = s.published_ver.load(Ordering::Acquire);
         let pv=s.preview_ver.load(Ordering::Acquire);
         if v == self.ver && pv==self.preview_ver {
@@ -405,6 +460,24 @@ impl Player {
         }
     }
 
+    /// The two channels at fractional frame `x` as heard: through the panning, volume and stereo separation
+    /// envelopes, as the mixdown would make them (Lemon Studio's design).
+    fn frame(&mut self, s: &Sample, x: f64) -> (f32, f32) {
+        let (l, r) = (Player::read(s, 0, x), Player::read(s, 1, x));
+        let Some(e) = self.env.as_ref().filter(|e| !e.flat) else { return (l, r) };
+        let k = e.at(x);
+        let m = match self.env_last {
+            Some((last, m)) if last == k => m,
+            _ => {
+                let m = e.matrix(k);
+                self.env_last = Some((k, m));
+                m
+            }
+        };
+        let (l, r) = (f64::from(l), f64::from(r));
+        ((m[0][0] * l + m[0][1] * r) as f32, (m[1][0] * l + m[1][1] * r) as f32)
+    }
+
     /// The sample at fractional frame `x` in channel `c`.
     fn read(s: &Sample, c: usize, x: f64) -> f32 {
         let i = x.floor();
@@ -436,7 +509,7 @@ impl Tesla {
 
 impl Plugin for Tesla {
     const NAME: &'static str = "ML Tesla";
-    const VENDOR: &'static str = "ML Studio";
+    const VENDOR: &'static str = "AQUILA";
     const URL: &'static str = "";
     const EMAIL: &'static str = "";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
@@ -500,6 +573,7 @@ impl Plugin for Tesla {
         // start, lands on Tesla's selection start, or on the sample's start).
         let t = ctx.transport();
         let host_playing = t.playing;
+        s.tempo.store(t.tempo.unwrap_or(0.0).to_bits(), Ordering::Relaxed);
         if s.slave.load(Ordering::Relaxed) {
             if host_playing != p.host_was_playing {
                 if host_playing {
@@ -548,16 +622,12 @@ impl Plugin for Tesla {
         s.level.store(peak.to_bits(), Ordering::Relaxed);
         if armed {
             let when = s.when.load(Ordering::Relaxed);
-            let max = s.max.load(Ordering::Relaxed);
             let ring = &s.ring;
             let (li, ri) = (&*l, &*r);
-            let b = p.rec.block(when, host_playing, host_rate, max, li, ri, |i| {
+            let b = p.rec.block(when, host_playing, host_rate, li, ri, |i| {
                 ring.push([li[i], ri[i]]);
             });
             s.capturing.store(b.kept > 0, Ordering::Relaxed);
-            if b.done {
-                s.armed.store(false, Ordering::Release);
-            }
         } else {
             s.capturing.store(false, Ordering::Relaxed);
         }
@@ -576,8 +646,9 @@ impl Plugin for Tesla {
                 let target = target.clamp(0.0, (n - 1) as f64);
                 let v = ((target - p.pos) / frames.max(1) as f64).clamp(-4.0 * step, 4.0 * step);
                 for i in 0..frames {
-                    l[i] += Player::read(&smp, 0, p.pos);
-                    r[i] += Player::read(&smp, 1, p.pos);
+                    let (a, b) = p.frame(&smp, p.pos);
+                    l[i] += a;
+                    r[i] += b;
                     p.pos = (p.pos + v).clamp(0.0, (n - 1) as f64);
                 }
             } else if p.playing && n > 0 {
@@ -593,8 +664,9 @@ impl Plugin for Tesla {
                             break;
                         }
                     }
-                    l[i] += Player::read(&smp, 0, p.pos);
-                    r[i] += Player::read(&smp, 1, p.pos);
+                    let (a, b) = p.frame(&smp, p.pos);
+                    l[i] += a;
+                    r[i] += b;
                     p.pos += step;
                 }
             }
@@ -607,7 +679,7 @@ impl Plugin for Tesla {
 
 impl ClapPlugin for Tesla {
     const CLAP_ID: &'static str = "org.openstudio.tesla";
-    const CLAP_DESCRIPTION: Option<&'static str> = Some("ML Studio's audio editor and recorder");
+    const CLAP_DESCRIPTION: Option<&'static str> = Some("AQUILA's audio editor and recorder");
     const CLAP_MANUAL_URL: Option<&'static str> = None;
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
     const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::AudioEffect, ClapFeature::Utility, ClapFeature::Stereo];
@@ -637,9 +709,29 @@ pub fn edison_from_plugin_state(blob: &[u8]) -> Option<Vec<u8>> {
     state::from_plugin_state(blob).map(|s| state::to_edison(&s))
 }
 
+/// The smallest window width before the tool grid grew to 40 x 32 buttons (2026-11-05); see `restore_settings`.
+const OLD_MIN_W: u32 = 680;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A saved window size: kept when Tesla could open at it, widened to today's smallest when it was saved at the
+    /// smallest width before the tool grid grew, the default when it is not one Tesla saves.
+    #[test]
+    fn a_saved_size_opens_at_least_at_the_smallest() {
+        for ((w, h), want) in [
+            ((900, 500), (900, 500)),
+            ((OLD_MIN_W, view::MIN_H), (view::MIN_W, view::MIN_H)),
+            ((OLD_MIN_W - 1, 500), (view::W, view::H)),
+            ((800, view::MIN_H - 1), (view::W, view::H)),
+        ] {
+            let sh = Shared::default();
+            sh.restore_settings(&state::Rec::default(), &state::View { w, h, ..state::View::default() });
+            assert_eq!((sh.size.0.load(Ordering::Relaxed), sh.size.1.load(Ordering::Relaxed)), want, "{w} x {h}");
+        }
+        assert!(view::MIN_W > OLD_MIN_W);
+    }
 
     #[test]
     fn a_take_joins_the_document_when_disarmed() {
@@ -671,6 +763,57 @@ mod tests {
         sh.drain();
         sh.drain();
         assert_eq!(sh.doc.lock().unwrap().frames(), 1);
+    }
+
+    /// At its For limit a take goes on and keeps its last frames (Edison: a rolling log).
+    #[test]
+    fn a_take_keeps_its_last_minute() {
+        let sh = Shared::default();
+        sh.host_rate.store(1000, Ordering::Relaxed);
+        sh.max.store(1, Ordering::Relaxed);
+        sh.append.store(false, Ordering::Relaxed);
+        sh.armed.store(true, Ordering::Relaxed);
+        // 70 s at 1 kHz, in drains of 1 s (frame i is i / 100,000).
+        for s in 0..70 {
+            for i in 0..1000 {
+                let v = (s * 1000 + i) as f32 / 100_000.0;
+                assert!(sh.ring.push([v, -v]));
+            }
+            sh.drain();
+        }
+        assert!(sh.armed.load(Ordering::Relaxed), "still recording");
+        assert_eq!(sh.take.lock().unwrap().l.len(), 60_000);
+        sh.armed.store(false, Ordering::Relaxed);
+        sh.drain();
+        sh.drain();
+        let d = sh.doc.lock().unwrap();
+        assert_eq!(d.frames(), 60_000);
+        assert_eq!(d.sample.ch[0][0], 10_000.0 / 100_000.0, "the first 10 s are gone");
+    }
+
+    /// Playback hears the amp envelopes (as the mixdown would make them) without changing the sample, and follows
+    /// their edits.
+    #[test]
+    fn envelopes_are_heard_while_playing() {
+        let sh = Shared::default();
+        sh.with_doc(|d| d.load(Sample::from_channels(1000, vec![vec![0.5; 101], vec![0.5; 101]], Format::Float32), "a.wav"));
+        let mut p = Player::default();
+        p.sync(&sh);
+        let smp = p.sample.clone().unwrap();
+        assert_eq!(p.frame(&smp, 50.0), (0.5, 0.5), "flat envelopes: as it is");
+        // The volume envelope down to the bottom at the end: silence there, half way down at the middle.
+        sh.with_doc(|d| d.edit_env("Move envelope point").move_point(env::VOLUME, 101, 2, 100.0, 0.0));
+        p.sync(&sh);
+        assert_eq!(p.frame(&smp, 100.0), (0.0, 0.0));
+        let mid = p.frame(&smp, 50.0).0;
+        let mut mixed = (*smp).clone();
+        sh.with_doc(|d| env::mixdown(&mut mixed, &d.env));
+        assert!((mid - mixed.ch[0][50]).abs() < 1e-6, "{mid} vs {}", mixed.ch[0][50]);
+        assert_eq!(sh.doc.lock().unwrap().sample.ch[0][100], 0.5, "the sample is unchanged");
+        // Undone: heard flat again.
+        sh.with_doc(|d| d.undo());
+        p.sync(&sh);
+        assert_eq!(p.frame(&smp, 100.0), (0.5, 0.5));
     }
 
     #[test]

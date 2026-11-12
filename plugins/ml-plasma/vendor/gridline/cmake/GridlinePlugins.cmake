@@ -1,4 +1,4 @@
-# ML Studio adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
+# AQUILA adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
 # PH-09: Gridline as a plugin. Builds <build>/plugins/Gridline.clap,
 # <build>/plugins/Gridline.vst3 and, on macOS, <build>/plugins/Gridline.component
 # (Audio Unit v2; J-64). Each holds the instrument "Gridline" and the effect
@@ -340,7 +340,7 @@ if(APPLE)
 endif()
 add_test(NAME suite COMMAND gridline_tests_suite WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
-# ML Studio private adaptation: one stock instrument, no installation.
+# AQUILA private adaptation: one stock instrument, no installation.
 file(WRITE ${CMAKE_BINARY_DIR}/generated/suite-ml-plasma.txt "ML Plasma ${GRIDLINE_VERSION_FULL} ${GRIDLINE_BUILD_ID}\n")
 gridline_plugin(ml_plasma_clap clap src/plugin/ClapEntry.cpp MLPlasmaView NAME "ML Plasma" SUITE ml-plasma BUNDLE_ID de.michaellane.MLPlasma)
 

@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! One thread owns MIDI output connections for master sync, all-notes-off and control-surface feedback.
+//! MIDI output: master sync (MIDI clock or MTC) to the output devices with Send master sync, all notes off, and what
+//! Lemon MIDI Out channels send to the devices with their port. One thread owns the open outputs; it watches the
+//! playback (`transport::Watch`) and times the clock itself, from the playback's position and tempo at each start.
 //!
-// spec: ui/midi-settings.md §2, §7
+// spec: ui/midi-settings.md §2, §7; plugins/midi-out.md §6
 
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
@@ -40,9 +42,13 @@ pub struct Config {
     /// Output devices that get the master sync (open), with their Send all notes off.
     pub sync: Vec<(String, bool)>,
     pub surfaces: Vec<SurfaceFrame>,
+    /// Output devices with a port number (open): what Lemon MIDI Out sends to that port goes to them.
+    pub ports: Vec<(String, u8)>,
     pub kind: SyncKind,
     /// Master sync offset, milliseconds.
     pub offset_ms: i32,
+    /// The devices of `ports` that are not in `sync` and have Send all notes off.
+    pub ports_off: Vec<String>,
     /// The project's ticks per quarter note and tempo (until playback reports its own).
     pub ppq: u16,
     pub tempo: f64,
@@ -50,7 +56,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
-        Config { sync: Vec::new(), surfaces: Vec::new(), kind: SyncKind::Clock, offset_ms: 0, ppq: 96, tempo: 120.0 }
+        Config { sync: Vec::new(), surfaces: Vec::new(), ports: Vec::new(), kind: SyncKind::Clock, offset_ms: 0, ports_off: Vec::new(), ppq: 96, tempo: 120.0 }
     }
 }
 
@@ -62,10 +68,14 @@ pub struct SurfaceFrame {
     pub messages: Vec<Vec<u8>>,
 }
 
+/// An open output: its name, whether it gets the master sync (and its Send all notes off), the control-surface
+/// feedback it shows, its Lemon MIDI Out port, whether it takes all notes off, the connection.
 struct Output {
     port: String,
     sync: Option<bool>,
     surface: Option<SurfaceFrame>,
+    lemon_port: Option<u8>,
+    notes_off: bool,
     conn: midir::MidiOutputConnection,
 }
 
@@ -98,11 +108,12 @@ impl Output {
 
 fn reconcile(open: &mut Vec<Output>, cfg: &Config) {
     let wanted = cfg.sync.iter().map(|(name, _)| name)
-        .chain(cfg.surfaces.iter().map(|surface| &surface.port));
+        .chain(cfg.surfaces.iter().map(|surface| &surface.port))
+        .chain(cfg.ports.iter().map(|(name, _)| name));
     for port in wanted {
         if open.iter().all(|o| &o.port != port) {
             if let Some(conn) = connect(port) {
-                open.push(Output { port: port.clone(), sync: None, surface: None, conn });
+                open.push(Output { port: port.clone(), sync: None, surface: None, lemon_port: None, notes_off: false, conn });
             }
         }
     }
@@ -113,7 +124,10 @@ fn reconcile(open: &mut Vec<Output>, cfg: &Config) {
             all_notes_off(&mut out.conn);
         }
         out.sync = sync;
-        out.apply_surface(surface) && (sync.is_some() || surface.is_some())
+        out.lemon_port = cfg.ports.iter().find(|(port, _)| *port == out.port).map(|p| p.1);
+        // Send all notes off is per device: a port-only device has it from its settings too.
+        out.notes_off = sync.unwrap_or_else(|| cfg.ports_off.iter().any(|n| *n == out.port));
+        out.apply_surface(surface) && (sync.is_some() || surface.is_some() || out.lemon_port.is_some())
     });
 }
 
@@ -215,10 +229,12 @@ struct Running {
     piece: u8,
 }
 
+
 fn run(rx: Receiver<Cmd>, watch: Watch) {
     let mut cfg = Config::default();
-    let mut open = Vec::new();
+    let mut open: Vec<Output> = Vec::new();
     let mut retry_at = Instant::now();
+    let queue = crate::lemon_midi_out::queue();
     let (mut was, mut generation) = (State::Stopped, watch.generation());
     let mut running: Option<Running> = None;
     // Messages due later (a positive offset delays them all).
@@ -228,6 +244,8 @@ fn run(rx: Receiver<Cmd>, watch: Watch) {
         match rx.recv_timeout(wait) {
             Ok(Cmd::Config(c)) => {
                 let endpoints_changed = c.sync != cfg.sync
+                    || c.ports != cfg.ports
+                    || c.ports_off != cfg.ports_off
                     || c.surfaces.iter().map(|f| &f.port).ne(cfg.surfaces.iter().map(|f| &f.port));
                 if endpoints_changed {
                     reconcile(&mut open, &c);
@@ -245,7 +263,7 @@ fn run(rx: Receiver<Cmd>, watch: Watch) {
                 cfg = c;
             }
             Ok(Cmd::NotesOff) => {
-                for o in open.iter_mut().filter(|o| o.sync == Some(true)) {
+                for o in open.iter_mut().filter(|o| o.notes_off) {
                     all_notes_off(&mut o.conn);
                 }
                 continue;
@@ -259,6 +277,12 @@ fn run(rx: Receiver<Cmd>, watch: Watch) {
         if Instant::now() >= retry_at {
             reconcile(&mut open, &cfg);
             retry_at = Instant::now() + Duration::from_secs(1);
+        }
+        // Lemon MIDI Out's messages go out at once, to the devices with their port (none: they are dropped).
+        while let Some(m) = queue.pop() {
+            for o in open.iter_mut().filter(|o| o.lemon_port == Some(m.port)) {
+                let _ = o.conn.send(m.data());
+            }
         }
         if !open.iter().any(|out| out.sync.is_some()) {
             (was, generation, running) = (watch.state(), watch.generation(), None);

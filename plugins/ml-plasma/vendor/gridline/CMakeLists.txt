@@ -1,4 +1,4 @@
-# ML Studio adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
+# AQUILA adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
 cmake_minimum_required(VERSION 3.16)
 project(gridline VERSION 0.7.4 LANGUAGES C CXX)
 # Prerelease label: "beta.1" makes this Gridline 0.7.0-beta.1 (published as a GitHub pre-release);

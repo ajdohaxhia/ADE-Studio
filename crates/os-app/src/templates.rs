@@ -30,7 +30,7 @@ const LAST_KEY: &str = "last_project";
 /// Existing templates and explicit user choices, including Empty, are preserved.
 pub(crate) fn install_factory_template() -> std::io::Result<()> {
     let Some(root) = root() else { return Ok(()) };
-    let path=file_in(&root,"Lemon Studio","Lemon Starter");
+    let path=file_in(&root,"AQUILA","Lemon Starter");
     if !path.exists() {
         std::fs::create_dir_all(path.parent().unwrap())?;
         use std::io::Write;
@@ -41,7 +41,7 @@ pub(crate) fn install_factory_template() -> std::io::Result<()> {
         }
     }
     if prefs::text(TEMPLATE_KEY).is_none() {
-        prefs::set_text(TEMPLATE_KEY, "Lemon Studio/Lemon Starter");
+        prefs::set_text(TEMPLATE_KEY, "AQUILA/Lemon Starter");
         crate::settings_file::write("startup_show_mixer", "1");
     }
     Ok(())
@@ -67,11 +67,13 @@ pub struct Category {
     pub templates: Vec<String>,
 }
 
-/// Template `name`'s file in category `cat`.
+/// Template `name`'s file in category `cat`: `<name>.lemon`, else an existing `<name>.flp` (spec: flp/lemon-format.md
+/// "Templates").
 pub(crate) fn file_in(root: &Path, cat: &str, name: &str) -> PathBuf {
-    let native=root.join(cat).join(name).join(format!("{name}.lmn"));
-    let legacy=native.with_extension("flp");
-    if native.exists() || !legacy.exists() {native} else {legacy}
+    let dir = root.join(cat).join(name);
+    let lemon = dir.join(format!("{name}.{}", crate::project_files::EXT));
+    let flp = dir.join(format!("{name}.flp"));
+    if !lemon.is_file() && flp.is_file() { flp } else { lemon }
 }
 
 /// The folders in `dir`, by name, sorted without regard to case.
@@ -83,7 +85,7 @@ fn folders(dir: &Path) -> Vec<String> {
     v
 }
 
-/// The templates in `root`: its category folders with the template folders that hold their `<name>.flp`. Categories
+/// The templates in `root`: its category folders with the template folders that hold their `<name>.lemon` or `.flp`. Categories
 /// without one are left out.
 pub fn scan(root: &Path) -> Vec<Category> {
     folders(root)
@@ -568,7 +570,7 @@ mod send_setup_tests {
                     assert!(p.load_state(&state));
                     for (id,value) in expected {assert_eq!(p.param_text(id,p.param_value(id).unwrap()).unwrap(),value,"state recall {name} {id}");}
                     let reference=crate::project_plugins::plugin_ref(p.desc(),state);
-                    track.slots[0]=Some(os_model::SlotPlugin{name:os_flp::wrapper::WRAPPER.into(),state:os_flp::wrapper::encode(None,&reference)});
+                    track.slots[0]=Some(os_model::SlotPlugin{id:os_model::Id::NONE,name:os_flp::wrapper::WRAPPER.into(),state:os_flp::wrapper::encode(None,&reference)});
                     track.slots_enabled=true;track.slot_on[0]=true;track.slot_mix[0]=1.0;
                 }
             }
@@ -610,8 +612,8 @@ mod send_setup_tests {
 mod public_tests {
     use os_engine::effects::{delay as d,reverb as r,dynamics as c};
     fn slot(name:&str,state:Vec<u8>)->os_model::SlotPlugin {
-        let reference=os_model::PluginRef{format:"clap".into(),name:name.into(),vendor:"Lemon Studio".into(),path:format!("{name}.clap"),state,..Default::default()};
-        os_model::SlotPlugin{name:os_flp::wrapper::WRAPPER.into(),state:os_flp::wrapper::encode(None,&reference)}
+        let reference=os_model::PluginRef{format:"clap".into(),name:name.into(),vendor:"AQUILA".into(),path:format!("{name}.clap"),state,..Default::default()};
+        os_model::SlotPlugin{id:os_model::Id::NONE,name:os_flp::wrapper::WRAPPER.into(),state:os_flp::wrapper::encode(None,&reference)}
     }
     #[test]
     #[ignore]

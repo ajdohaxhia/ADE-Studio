@@ -440,7 +440,7 @@ impl Document {
             });
             let props = ARADocumentProperties {
                 structSize: size_of::<ARADocumentProperties>(),
-                name: c"Lemon Studio audio clip".as_ptr(),
+                name: c"AQUILA audio clip".as_ptr(),
             };
             let inst = sized((factory.api.createDocumentControllerWithDocument.unwrap())(
                 &*host_instance,
@@ -861,7 +861,7 @@ impl Module {
     if sample.frames()!=s.frames || sample.rate!=s.rate || sample_fingerprint(&sample)!=s.fingerprint{return Err("The source audio differs from the saved ARA document; restore its original audio file".into());}
    }
    let doc=Document::with_archive(self,id,sample,saved.map(|s|s.archive.as_slice()),saved.map(|s|s.archive_id.as_str()))?;
-   let mut p=crate::Plugin::construct(self,id,Some(doc))?;
+   let mut p=crate::Plugin::with_guard(self,id,os_host::guard::module_of(self.code as *const std::ffi::c_void),Some(doc))?;
    p.ara_source=Some(source.to_string_lossy().into_owned());Ok(p)
   }).map_err(|c|os_host::guard::stopped_text("ARA editor",c))??;
         Ok(os_host::share(plugin, guard))

@@ -220,8 +220,8 @@ pub(super) fn discover(plugin: &Plugin) -> Vec<Preset> {
             let mut declared = Locations::default();
             let indexer = Indexer {
                 clap_version: CLAP_VERSION,
-                name: c"Lemon Studio".as_ptr(),
-                vendor: c"Lemon Studio".as_ptr(),
+                name: c"AQUILA".as_ptr(),
+                vendor: c"AQUILA".as_ptr(),
                 url: c"".as_ptr(),
                 version: c"1".as_ptr(),
                 indexer_data: (&raw mut declared).cast(),

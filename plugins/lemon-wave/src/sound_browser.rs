@@ -54,7 +54,7 @@ pub fn catalogue() -> std::path::PathBuf {
         .or_else(|| std::env::var_os("HOME"))
         .map(std::path::PathBuf::from)
         .unwrap_or_default()
-        .join("Lemon Studio/Lemon Wave/library.json")
+        .join("AQUILA/Lemon Wave/library.json")
 }
 pub fn entries() -> Vec<Entry> {
     let bundled = crate::included_library::entries();

@@ -1,4 +1,4 @@
-// ML Studio adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
+// AQUILA adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
 // Gridline — the plugin's editor frame (PH-09): Gridline's workspace (top
 // bar, browser, channel rack, piano roll, playlist, mixer, plugin windows,
 // dialogs, status bar) drawn into the host's plugin window, plus the "Host
@@ -258,7 +258,7 @@ void Frame::drawSingle(int winW, int winH, int fbW, int fbH) {
       drawPluginHeader(app, target);
       drawPluginBody(app, target, width);
     }
-    ImGui::TextDisabled("ML Studio | Plasma engine by Gridline / lolitemaultes | GPL v3");
+    ImGui::TextDisabled("AQUILA | Plasma engine by Gridline / lolitemaultes | GPL v3");
     // The editor's natural size: auto-resize clamps the window to the display,
     // which is the view at the current zoom, so a larger editor would never be
     // measured (and would be cut off instead of zoomed to fit).

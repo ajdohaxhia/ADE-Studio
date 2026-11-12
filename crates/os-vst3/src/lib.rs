@@ -234,6 +234,8 @@ pub struct Module {
     /// An address in the module's code (its factory's method table): which module the crash guard stops when it
     /// crashes.
     code: usize,
+    /// The factory's URL (the plug-ins' help page; `os_host::Plugin::help_url`).
+    url: String,
 }
 
 // SAFETY: the factory and host objects are only used from the UI thread (creating instances); VST 3 factories may be
@@ -263,13 +265,14 @@ impl Module {
         unsafe {
             let code = if factory.is_null() { 0 } else { *(factory as *const usize) };
             let factory = owned::<dyn IPluginFactory>(factory);
-            let mut m = Module { path: path.to_path_buf(), plugins: Vec::new(), classes: Vec::new(), ara_factories: Vec::new(), factory: None, host: HostApp::create(), lib, code };
+            let mut m = Module { path: path.to_path_buf(), plugins: Vec::new(), classes: Vec::new(), ara_factories: Vec::new(), factory: None, host: HostApp::create(), lib, code, url: String::new() };
             let Some(factory) = factory else { return Err(format!("{}: no plug-in factory", file.display())) };
             if let Some(f3) = factory.cast::<dyn IPluginFactory3>() {
                 f3.set_host_context(m.host.raw());
             }
             let mut finfo: PFactoryInfo = std::mem::zeroed();
             let fvendor = if factory.get_factory_info(&mut finfo) == kResultOk { c_arr(&finfo.vendor) } else { String::new() };
+            m.url = c_arr(&finfo.url);
             let f2 = factory.cast::<dyn IPluginFactory2>();
             let f3 = factory.cast::<dyn IPluginFactory3>();
             for i in 0..factory.count_classes() {
@@ -453,7 +456,7 @@ impl os_host::Library for Module {
     fn create(self: Arc<Self>, id: &str) -> Result<os_host::SharedPlugin, String> {
         let guard = os_host::guard::module_of(self.code as *const c_void);
         let name = self.plugins.iter().find(|d| d.id.eq_ignore_ascii_case(id)).map_or(id, |d| d.name.as_str());
-        let plugin = os_host::guard::call(&guard, || Plugin::new(&self, id)).map_err(|c| os_host::guard::stopped_text(name, c))??;
+        let plugin = os_host::guard::call(&guard, || Plugin::with_guard(&self, id, guard.clone(), None)).map_err(|c| os_host::guard::stopped_text(name, c))??;
         Ok(os_host::share(plugin, guard))
     }
 }
@@ -474,6 +477,8 @@ struct Note {
     kind: NoteKind,
     key: u8,
     velocity: f32,
+    /// A note on's MIDI channel, 0..15 (`NoteLevels::channel`); a note off goes on its key's.
+    ch: u8,
 }
 
 // Event types and the tuning note expression (spec §5).
@@ -572,6 +577,13 @@ pub struct Plugin {
     separate: bool,
     handler: Com<Handler>,
     events: Com<EventList>,
+    /// The processor's output events while capturing notes (`os_host::Plugin::capture_notes`), and the notes taken
+    /// from them.
+    events_out: Com<EventList>,
+    capture: bool,
+    notes_out: Vec<os_host::NoteOut>,
+    /// It has an event output bus (`os_host::Plugin::puts_out_notes`).
+    note_outputs: bool,
     params_in: Com<ParamChanges>,
     params_out: Com<ParamChanges>,
     shared: Arc<Shared>,
@@ -638,13 +650,16 @@ unsafe impl Send for Plugin {}
 impl Plugin {
     /// Creates and initialises class `id` of `module` (spec §4.1-4.4); buses are set up, not active yet.
     pub fn new(module: &Arc<Module>, id: &str) -> Result<Plugin, String> {
-        Self::construct(module,id,None)
+        Self::with_guard(module, id, os_host::guard::module_of(module.code as *const c_void), None)
     }
     pub fn new_ara(module:&Arc<Module>,id:&str,sample:Arc<os_engine::sample::Sample>,archive:Option<&[u8]>)->Result<Plugin,String>{
         let doc=ara::Document::new(module,id,sample,archive)?;
-        Self::construct(module,id,Some(doc))
+        Self::with_guard(module, id, os_host::guard::module_of(module.code as *const c_void), Some(doc))
     }
-    fn construct(module:&Arc<Module>,id:&str,ara:Option<ara::Document>)->Result<Plugin,String>{
+
+    /// [`Plugin::new`] for an instance called under `guard` ([`Module::create`]): its editor's run loop callbacks run
+    /// under the same guard (Linux).
+    fn with_guard(module: &Arc<Module>, id: &str, guard: Arc<os_host::guard::Module>, ara: Option<ara::Document>) -> Result<Plugin, String> {
         let i = module.plugins.iter().position(|d| d.id.eq_ignore_ascii_case(id)).ok_or_else(|| format!("no plug-in {id} in {}", module.path.display()))?;
         let desc = module.plugins[i].clone();
         let cid = module.classes[i];
@@ -670,7 +685,13 @@ impl Plugin {
                     }
                 }
             };
-            let shared = Arc::new(Shared::default());
+            #[cfg(target_os = "linux")]
+            let shared = Arc::new(Shared { guard, ..Shared::default() });
+            #[cfg(not(target_os = "linux"))]
+            let shared = {
+                drop(guard);
+                Arc::new(Shared::default())
+            };
             let mut p = Plugin {
                 editor_state: Arc::new(std::sync::Mutex::new(EditorState {
                     view: None, controller: controller.clone(), frame: Frame::create(shared.clone()),
@@ -686,6 +707,10 @@ impl Plugin {
                 separate,
                 handler: Handler::create(shared.clone()),
                 events: EventList::create(),
+                events_out: EventList::create(),
+                capture: false,
+                notes_out: Vec::new(),
+                note_outputs: false,
                 params_in: ParamChanges::create(),
                 params_out: ParamChanges::create(),
                 shared,
@@ -703,7 +728,7 @@ impl Plugin {
                 bus_in: Vec::new(),
                 bus_out: Vec::new(),
                 queue: Vec::with_capacity(256),
-                note_ids: NoteIds { ids: [-1; 128], next: 0, active: Vec::with_capacity(128) },
+                note_ids: NoteIds { ids: [-1; 128], next: 0, active: Vec::with_capacity(128), chs: [0; 128] },
                 fx_in: (Vec::new(), Vec::new()),
                 from_processor: Vec::with_capacity(256),
                 pending_since: None,
@@ -800,6 +825,7 @@ impl Plugin {
                 c.activate_bus(AUDIO, OUTPUT, 0, 1);
             }
             self.takes_notes = c.get_bus_count(EVENT, INPUT) > 0;
+            self.note_outputs = c.get_bus_count(EVENT, OUTPUT) > 0;
             if self.takes_notes {
                 c.activate_bus(EVENT, INPUT, 0, 1);
             }
@@ -1319,10 +1345,14 @@ impl Plugin {
             input_param_changes: self.params_in.static_ptr(),
             output_param_changes: self.params_out.static_ptr(),
             input_events: if self.takes_notes { self.events.static_ptr() } else { null_static() },
-            output_events: null_static(),
+            output_events: if self.capture { self.events_out.static_ptr() } else { null_static() },
             context: &mut self.context,
         };
         unsafe { self.processor.process(&mut data) };
+        if self.capture {
+            let room = MAX_NOTES_OUT.saturating_sub(self.notes_out.len());
+            self.notes_out.extend(notes_of(&self.events_out.get().take()).take(room));
+        }
         if self.outs.first() == Some(&1) {
             right.copy_from_slice(left);
         }
@@ -1349,11 +1379,13 @@ impl Plugin {
     }
 }
 
-/// Note id of each key's latest note on (-1 = none), and the next id to give.
+/// Note id of each key's latest note on (-1 = none), and the next id to give; the MIDI channel each key's latest note
+/// on went on (its note off goes on the same one).
 struct NoteIds {
     ids: [i32; 128],
     next: i32,
     active: Vec<(u8, i32)>,
+    chs: [u8; 128],
 }
 
 impl NoteIds {
@@ -1368,14 +1400,15 @@ impl NoteIds {
                 self.next = (id + 1) & 0x7fff_ffff;
                 self.ids[key] = id;
                 self.active.push((n.key,id));
-                let on = NoteOnEvent { channel: 0, pitch: i16::from(n.key), tuning: 0.0, velocity: n.velocity, length: 0, note_id: id };
+                self.chs[key] = n.ch & 15;
+                let on = NoteOnEvent { channel: i16::from(n.ch & 15), pitch: i16::from(n.key), tuning: 0.0, velocity: n.velocity, length: 0, note_id: id };
                 (NOTE_ON_EVENT, EventData { note_on: on })
             }
             NoteKind::Off => {
                 let at=self.active.iter().rposition(|&(k,_)|k==n.key)?;
                 let (_,id)=self.active.remove(at);
                 self.ids[key]=self.active.iter().rfind(|&&(k,_)|k==n.key).map_or(-1,|&(_,id)|id);
-                (NOTE_OFF_EVENT, EventData { note_off: NoteOffEvent { channel: 0, pitch: i16::from(n.key), velocity: 0.0, note_id: id, tuning: 0.0 } })
+                (NOTE_OFF_EVENT, EventData { note_off: NoteOffEvent { channel: i16::from(self.chs[key]), pitch: i16::from(n.key), velocity: 0.0, note_id: id, tuning: 0.0 } })
             }
             NoteKind::Tune => {
                 let id = self.ids[key];
@@ -1389,6 +1422,29 @@ impl NoteIds {
         };
         Some(Event { bus_index: 0, sample_offset: n.time as i32, ppq_position: 0.0, flags: 0, type_, event })
     }
+}
+
+/// Most notes put out kept until they are taken.
+const MAX_NOTES_OUT: usize = 4096;
+
+/// The notes among a processor's output events: note ons (a velocity of 0 is a note off) and offs.
+fn notes_of(events: &[Event]) -> impl Iterator<Item = os_host::NoteOut> + '_ {
+    events.iter().filter_map(|e| {
+        let offset = e.sample_offset.max(0) as u32;
+        // SAFETY: the union member read is the one the event's type names.
+        let (on, key, channel, velocity) = match e.type_ {
+            NOTE_ON_EVENT => {
+                let n = unsafe { e.event.note_on };
+                (n.velocity > 0.0, n.pitch, n.channel, n.velocity)
+            }
+            NOTE_OFF_EVENT => {
+                let n = unsafe { e.event.note_off };
+                (false, n.pitch, n.channel, n.velocity)
+            }
+            _ => return None,
+        };
+        Some(os_host::NoteOut { offset, key: key.clamp(0, 127) as u8, channel: channel.clamp(0, 15) as u8, velocity, on })
+    })
 }
 
 impl os_host::Plugin for Plugin {
@@ -1423,6 +1479,24 @@ impl os_host::Plugin for Plugin {
     fn mpe_support(&self)->u8{if [0,2].iter().all(|&i|self.mpe_map[i]!=u32::MAX){2}else if (1..16).all(|ch|[74,129].iter().all(|&cc|self.midi_map.get(ch*130+cc).is_some_and(|&id|id!=u32::MAX&&self.midi_map.get(cc)!=Some(&id)))){1}else{0}}
     fn desc(&self) -> &Descriptor {
         &self.desc
+    }
+
+    fn capture_notes(&mut self, on: bool) {
+        self.capture = on;
+        self.notes_out.clear();
+        self.events_out.get().take();
+    }
+
+    fn take_notes_out(&mut self) -> Vec<os_host::NoteOut> {
+        std::mem::take(&mut self.notes_out)
+    }
+
+    fn puts_out_notes(&self) -> bool {
+        self.note_outputs
+    }
+
+    fn help_url(&self) -> Option<String> {
+        Some(self._module.url.trim().to_owned()).filter(|u| !u.is_empty())
     }
 
     fn activate(&mut self, rate: u32) -> bool {
@@ -1571,6 +1645,16 @@ impl os_host::Plugin for Plugin {
     }
 }
 
+impl Plugin {
+    /// A note on, on MIDI channel `ch` (0..15).
+    fn start(&mut self, offset: u32, key: u8, velocity: f32, ch: u8) {
+        if let Some(m) = self.bend.as_mut().and_then(|b| b.note_on(key)) {
+            os_engine::Instrument::midi(self, offset, m);
+        }
+        self.queue.push(Note { time: offset, kind: NoteKind::On, key, velocity: velocity.clamp(0.0, 1.0), ch });
+    }
+}
+
 impl os_engine::Instrument for Plugin {
     fn parallel_processing(&self) -> bool { true }
     fn active(&self) -> bool {
@@ -1602,7 +1686,7 @@ impl os_engine::Instrument for Plugin {
         let held: Vec<u8> = self.ledger.held().collect();
         for key in held {
             if !std::mem::replace(&mut sent[usize::from(key.min(127))], true) {
-                self.queue.push(Note { time: 0, kind: NoteKind::Off, key, velocity: 0.0 });
+                self.queue.push(Note { time: 0, kind: NoteKind::Off, key, velocity: 0.0, ch: 0 });
             }
         }
         self.ledger.clear();
@@ -1618,15 +1702,18 @@ impl os_engine::Instrument for Plugin {
 
     fn note_on(&mut self, offset: u32, key: u8, velocity: f32) {
         if self.ara.is_some(){self.note_on_from(offset,key,velocity,0.);return;}
-        if let Some(m) = self.bend.as_mut().and_then(|b| b.note_on(key)) {
-            os_engine::Instrument::midi(self, offset, m);
-        }
-        self.queue.push(Note { time: offset, kind: NoteKind::On, key, velocity: velocity.clamp(0.0, 1.0) });
+        self.start(offset, key, velocity, 0);
+    }
+
+    /// The note's levels are dropped (VST 3 takes no pan or mod X / Y here), but not its MIDI channel.
+    fn note_start(&mut self, offset: u32, key: u8, velocity: f32, _start: f32, levels: os_engine::NoteLevels) {
+        if self.ara.is_some(){self.note_on_from(offset,key,velocity,0.);return;}
+        self.start(offset, key, velocity, levels.channel);
     }
 
     fn note_off(&mut self, offset: u32, key: u8) {
         if let Some(p)=&mut self.ara_playback {p.event(offset,ara_playback::Action::KeyOff(key));return;}
-        self.queue.push(Note { time: offset, kind: NoteKind::Off, key, velocity: 0.0 });
+        self.queue.push(Note { time: offset, kind: NoteKind::Off, key, velocity: 0.0, ch: 0 });
     }
 
     /// A controller message (spec: ui/midi-settings.md §4): VST3 takes controllers, channel pressure and pitch bend as
@@ -1660,7 +1747,7 @@ impl os_engine::Instrument for Plugin {
                     os_engine::Instrument::midi(self, offset, m);
                 }
             }
-            None => self.queue.push(Note { time: offset, kind: NoteKind::Tune, key, velocity: semitones }),
+            None => self.queue.push(Note { time: offset, kind: NoteKind::Tune, key, velocity: semitones, ch: 0 }),
         }
     }
 
@@ -1680,9 +1767,9 @@ impl os_engine::Instrument for Plugin {
     }
 
     fn note_on_from(&mut self, offset:u32,key:u8,velocity:f32,start:f32) {
-        self.voice_start(offset,key,velocity,start,os_engine::NoteLevels::default(),u32::MAX-u32::from(key));
+        self.voice_start(offset,key,velocity,start,0.0,os_engine::NoteLevels::default(),u32::MAX-u32::from(key));
     }
-    fn voice_start(&mut self,offset:u32,key:u8,velocity:f32,start:f32,levels:os_engine::NoteLevels,voice:u32) {
+    fn voice_start(&mut self,offset:u32,key:u8,velocity:f32,start:f32,_end:f32,levels:os_engine::NoteLevels,voice:u32) {
         if let Some(p)=&mut self.ara_playback {p.event(offset,ara_playback::Action::Start{key,id:voice,start,velocity,levels});}
         else {self.note_on(offset,key,velocity);}
     }

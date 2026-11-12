@@ -1,4 +1,4 @@
-// ML Studio adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
+// AQUILA adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
 #include "Settings.h"
 #include <cctype>
 #include <cstdlib>

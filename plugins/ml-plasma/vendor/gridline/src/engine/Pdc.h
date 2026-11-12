@@ -1,4 +1,4 @@
-// ML Studio adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
+// AQUILA adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
 // Gridline — plugin delay compensation (PDC) delay line for one edge of the
 // mixer graph (channel → insert, send, sidechain, bus send → return).
 // Built on the UI thread with a fixed power-of-two capacity; only the audio

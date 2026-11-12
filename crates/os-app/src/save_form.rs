@@ -94,7 +94,7 @@ thread_local! {
 
 /// The first `Project_N` (N from 1) that names nothing in `root`, as a folder or as a project file.
 pub fn free_name(root: &Path) -> String {
-    let taken = |n: &str| !root.as_os_str().is_empty() && (root.join(n).exists() || root.join(format!("{n}.lmn")).exists() || root.join(format!("{n}.flp")).exists());
+    let taken = |n: &str| !root.as_os_str().is_empty() && (root.join(n).exists() || root.join(format!("{n}.lmn")).exists() || root.join(format!("{n}.flp")).exists() || root.join(format!("{n}.{}", crate::project_files::EXT)).exists());
     (1u32..).map(|n| format!("Project_{n}")).find(|n| !taken(n)).expect("a free name")
 }
 
@@ -178,7 +178,7 @@ impl SaveForm {
 
     /// The project's file: `<folder>/<name>.lmn`.
     pub fn file(&self) -> PathBuf {
-        self.folder().join(format!("{}.lmn", self.name.text.trim()))
+        self.folder().join(format!("{}.{}", self.name.text.trim(), crate::project_files::EXT))
     }
 
     /// Location's text: the folder with a trailing separator (nothing without a root).
@@ -400,15 +400,16 @@ impl App {
             self.tell(Kind::Error, f.title(), spans(&["", &dir.display().to_string(), &format!(" could not be made: {e}")]));
             return self.dialog_done(Then::SaveProject(f.next), Reply::File(None));
         }
-        let before = self.state.project.info.clone();
-        let info = &mut self.state.project.info;
-        for (value, field) in [&mut info.title, &mut info.author, &mut info.url, &mut info.genre].into_iter().zip(&f.info) {
-            let text = field.text.trim();
-            if value.as_deref().unwrap_or("") != text {
-                *value = (!text.is_empty()).then(|| text.to_string());
+        // One undo step when the text changed (`control::edit`).
+        crate::control::edit(&mut self.state, crate::control::command::SONG_INFO, crate::control::command::Region::Settings, |s| {
+            let info = &mut s.project.info;
+            for (value, field) in [&mut info.title, &mut info.author, &mut info.url, &mut info.genre].into_iter().zip(&f.info) {
+                let text = field.text.trim();
+                if value.as_deref().unwrap_or("") != text {
+                    *value = (!text.is_empty()).then(|| text.to_string());
+                }
             }
-        }
-        crate::history::project_info(&mut self.state, before);
+        });
         if f.new {
             self.set_timebase(f.ppq);
             self.set_bar(f.num, 16 / f.den.max(1));

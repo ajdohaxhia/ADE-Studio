@@ -54,6 +54,7 @@ pub enum Icon {
     Project,
     Plug,
     Kick,
+    Lock,
     Touch,
     ArrowRight,
     ArrowLeft,

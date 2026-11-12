@@ -130,7 +130,7 @@ pub fn paint(ui: &mut Ui, s: &State) {
         // The colour tab: patterns and channels (spec: ui/channel-rack.md §13).
         let audio = matches!(b.target, BoxTarget::AudioClip(_))
             && crate::workspace_visibility::shown("visible_playlist-custom-swatches");
-        let tabbed = named || audio || matches!(b.target, BoxTarget::Rack(crate::rack::RBox::Channel(_)));
+        let tabbed = named || audio || matches!(b.target, BoxTarget::Rack(crate::rack::RBox::Channel(_) | crate::rack::RBox::ColorSel));
         let field = Rect::new(r.x + 4.0, r.y + 4.0, r.w - if !tabbed { 8.0 } else if lemon { 34.0 } else { 30.0 }, 22.0);
         if lemon {
             ui.c.fill_rrect(field, 4.0, t.tempo_box);
@@ -174,6 +174,7 @@ pub fn paint(ui: &mut Ui, s: &State) {
             BoxTarget::AudioClip(i) if audio => Some(crate::playlist::clips(s).get(i).and_then(|c| c.color.or_else(|| crate::playlist::clip_tint(s, c.source)))),
             BoxTarget::Name(n) => Some(s.project.pattern(n).and_then(|p| p.color)),
             BoxTarget::Rack(crate::rack::RBox::Channel(r)) => Some(s.project.channels.get(r).and_then(|c| c.color)),
+            BoxTarget::Rack(crate::rack::RBox::ColorSel) => Some(s.rack.sel.first().and_then(|&r| s.project.channels.get(r)).and_then(|c| c.color)),
             _ => None,
         };
         if let Some(col) = tab_col {

@@ -305,7 +305,7 @@ impl App {
     pub(crate) fn data_folder_done(&mut self, then: DThen, reply: Reply) {
         let yes = reply == Reply::Button(Answer::Yes);
         match (then, reply) {
-            // Don't copy: nothing is copied, and the check stays ticked (Lemon Studio rule).
+            // Don't copy: nothing is copied, and the check stays ticked (AQUILA rule).
             (DThen::CopySamples, _) => {
                 if yes {
                     self.state.message = self.copy_used_samples();
@@ -317,7 +317,7 @@ impl App {
             }
             (DThen::Picked, _) => {}
             // Save to the folder: the project goes to `<folder>/<name>.flp`, its samples to `<folder>/Samples` while Copy
-            // is ticked; the old folder and file stay. Don't save to the folder: the folder only (Lemon Studio rule).
+            // is ticked; the old folder and file stay. Don't save to the folder: the folder only (AQUILA rule).
             (DThen::Changed(dir), _) => {
                 self.set_data_folder(&dir);
                 self.state.message = Some(format!("Data folder: {}", dir.display()));
@@ -326,7 +326,7 @@ impl App {
                         self.copy_used_samples();
                     }
                     let name = crate::backup::project_name(self.state.path.as_deref());
-                    self.save_to(dir.join(format!("{name}.lmn")));
+                    self.save_to(dir.join(format!("{name}.{}", crate::project_files::EXT)));
                     reread(&self.state);
                 }
             }
@@ -343,7 +343,7 @@ impl App {
 
     /// Rename (spec: ui/data-folder.md §6), confirmed: with `folder_name`, the data folder is renamed to it, the project
     /// file inside it to `<name>.flp`, and the samples inside it are found in the renamed folder; without, only the
-    /// project file is renamed, in its folder (Lemon Studio rule). Then the project is saved (the file it replaces goes
+    /// project file is renamed, in its folder (AQUILA rule). Then the project is saved (the file it replaces goes
     /// to the backups, as on any save). A name that is taken is refused with a message, and nothing changes.
     pub(crate) fn rename_project(&mut self, name: &str, folder_name: Option<&str>) {
         let Some(file) = self.state.path.clone() else { return };
@@ -360,7 +360,7 @@ impl App {
             Some((old, new)) => file.strip_prefix(old).map_or_else(|_| file.clone(), |rel| new.join(rel)),
             None => file.clone(),
         };
-        let target = file_after.with_file_name(format!("{}.{}",name.trim(),file_after.extension().unwrap_or_else(||std::ffi::OsStr::new("lmn")).to_string_lossy()));
+        let target = file_after.with_file_name(format!("{}.{}", name.trim(), file.extension().map_or_else(|| crate::project_files::EXT.to_string(), |e| e.to_string_lossy().into_owned())));
         // Both names are checked before anything is renamed (the file's new name where the file is now).
         if let Some((_, new)) = folder_move.as_ref().filter(|(_, new)| new.exists()) {
             return self.rename_refused(new);
@@ -629,7 +629,7 @@ mod tests {
         }
     }
 
-    /// Name clashes in Samples (Lemon Studio rule): a file of the same name and size is used as it is; another file of
+    /// Name clashes in Samples (AQUILA rule): a file of the same name and size is used as it is; another file of
     /// that name gives `name (2).ext`, then `name (3).ext`. A copy keeps the original's modified time.
     #[test]
     fn copies_and_name_clashes() {

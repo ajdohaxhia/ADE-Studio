@@ -5,14 +5,18 @@
 //! Where the windows were when Lemon Studio last closed, put back at the next start: the main window (its restored
 //! frame and whether it was maximized) and, inside it, the Playlist, Mixer and Piano roll (their floating rects and
 //! whether each was maximized or collapsed to its title bar), the Channel rack (its place and size), the Plugin
-//! performance monitor, the Tempo tapper and the Touch controller. App-wide, kept in `settings.txt` (`settings_file`)
-//! as the app closes, never in the project. A fresh session also restores Channel Rack visibility when a prior choice exists.
+//! performance monitor, the Tempo tapper and the Touch controller, and whether the Mixer and the Channel rack are
+//! detached (Options ▸ Detached) with their own native windows' frames. App-wide, kept in `settings.txt`
+//! (`settings_file`) as the app closes, never in the project. Which windows are open is not kept: a start shows its
+//! usual ones, though a fresh session also restores Channel Rack visibility when a prior choice exists.
 //!
 //! Keys: `window_main` (`x,y,w,h,maximized`: outer top-left and inner size in the units the window system places
 //! windows in, points on macOS and pixels elsewhere), `window_playlist`, `window_mixer`, `window_piano_roll`
 //! (`x,y,w,h,maximized,collapsed`), `window_channel_rack` (`x,y,w,h`), `window_plugin_performance`,
-//! `window_tempo_tapper`, `window_touch_controller` (`x,y`); positions inside the main window are logical px, switches
-//! `1` / `0`. A value that cannot be read leaves that window as a first start has it. The first paint keeps every
+//! `window_tempo_tapper`, `window_touch_controller` (`x,y`), `window_mixer_detached`, `window_channel_rack_detached`
+//! (`detached,x,y,w,h`: the native window's frame in `window_main`'s units, `0,0,0,0` before it had one); positions
+//! inside the main window are logical px, switches `1` / `0`. A value that cannot be read leaves that window as a first
+//! start has it. The first paint keeps every
 //! window's part in the workspace, should the main window be smaller now (`win_clamp`).
 
 use os_ui::Rect;
@@ -29,6 +33,8 @@ const PERF: &str = "window_plugin_performance";
 const TAPPER: &str = "window_tempo_tapper";
 const TOUCH: &str = "window_touch_controller";
 const MAIN: &str = "window_main";
+/// The windows Options ▸ Detached can take out of the main window, and their keys.
+const NATIVE_DETACHABLE: [(Win, &str); 2] = [(Win::Mixer, "window_mixer_detached"), (Win::ChannelRack, "window_channel_rack_detached")];
 
 /// How tall a strip of the main window's top must be on a screen at the start, in `MainWin` units (`on_screens`).
 pub const MAIN_BAR_H: i32 = 32;
@@ -82,6 +88,22 @@ pub fn restore(s: &mut State) {
         // Not below the smallest size a resize leaves it (`views::rack::snap_size`).
         s.rack_size = (w.max(views::rack::min_w(s)), h.max(views::rack::min_h(s)));
     }
+    for (w, key) in NATIVE_DETACHABLE {
+        let Some([on, x, y, fw, fh]) = numbers(key) else { continue };
+        s.detached.retain(|d| d.0 != w);
+        s.detached_frames.retain(|d| d.0 != w);
+        if on == 1.0 {
+            let r = s.float_rect(w);
+            if let Some(i) = w.slot() {
+                s.wins[i].maxed = false;
+                s.wins[i].mini = false;
+            }
+            s.detached.push((w, (r.w, r.h)));
+            if fw >= 1.0 && fh >= 1.0 {
+                s.detached_frames.push((w, [x.round() as i32, y.round() as i32, fw.round() as i32, fh.round() as i32]));
+            }
+        }
+    }
     // Placed: they open there, not centred.
     for (key, pos, placed) in [(PERF, &mut s.perf.pos, &mut s.perf.placed), (TAPPER, &mut s.tapper.pos, &mut s.tapper.placed), (TOUCH, &mut s.touch.pos, &mut s.touch.placed)] {
         if let Some([x, y]) = numbers(key) {
@@ -134,6 +156,10 @@ pub fn save(s: &State) {
     }
     write("window_channel_rack_open",if s.shown(Win::ChannelRack){"1"}else{"0"});
     keep(RACK, &[s.rack_pos.0, s.rack_pos.1, s.rack_size.0, s.rack_size.1]);
+    for (w, key) in NATIVE_DETACHABLE {
+        let f = s.detached_frames.iter().find(|d| d.0 == w).map_or([0; 4], |d| d.1);
+        keep(key, &[switch(s.is_detached(w)), f[0] as f32, f[1] as f32, f[2] as f32, f[3] as f32]);
+    }
     for (key, pos, placed) in [(PERF, s.perf.pos, s.perf.placed), (TAPPER, s.tapper.pos, s.tapper.placed), (TOUCH, s.touch.pos, s.touch.placed)] {
         if placed {
             keep(key, &[pos.0, pos.1]);
@@ -249,6 +275,28 @@ mod tests {
         assert!(!b.touch.placed, "never opened: still centred the first time");
     }
 
+    /// A detached Mixer (Options ▸ Detached) comes back detached, in a native window where it was left; re-attached, it
+    /// comes back in the main window.
+    #[test]
+    fn a_detached_mixer_comes_back_detached() {
+        let mut app = App::new(None);
+        app.set_detached(Win::Mixer, true);
+        app.set_detached_frame(Win::Mixer, [-1500, 200, 1280, 520]);
+        save(&app.state);
+        assert_eq!(get("window_mixer_detached").as_deref(), Some("1,-1500,200,1280,520"));
+        let mut next = App::new(None);
+        restore(&mut next.state);
+        assert!(next.state.is_detached(Win::Mixer));
+        assert_eq!(next.detached_frame(Win::Mixer), Some([-1500, 200, 1280, 520]));
+        assert!(!next.state.is_max(Win::Mixer), "a detached window floats in its own window");
+
+        app.set_detached(Win::Mixer, false);
+        save(&app.state);
+        let mut next = App::new(None);
+        restore(&mut next.state);
+        assert!(!next.state.is_detached(Win::Mixer));
+    }
+
     /// A value that cannot be read leaves its window as a first start has it; a rack kept smaller than a resize allows
     /// comes back at the smallest size.
     #[test]
@@ -297,7 +345,7 @@ mod tests {
 /// No project, plugin, audio or UI initialization is needed.
 pub fn reset_preview_layout() -> Result<String,String> {
     let root=os_paths::user_dir().ok_or("No profile folder")?;
-    if root.file_name().and_then(|s|s.to_str())!=Some("Lemon Studio Public Preview") {
+    if root.file_name().and_then(|s|s.to_str())!=Some("AQUILA Public Preview") {
         return Err("Layout reset is restricted to the public preview profile".into());
     }
     let file=root.join("settings.txt");
@@ -322,8 +370,8 @@ fn without_window_layout(text:&str)->String {
 mod preview_reset_tests {
     #[test]
     fn preview_reset_keeps_other_settings() {
-        let text="default_template=Lemon Studio/Lemon Starter\nwindow_mixer=1,2,3,4,0,0\nwindow_playlist_detached=1\nbrowser_favorites=[x]\nwindow_main=1,2,3,4,0\nheadphones_on=true\n";
-        assert_eq!(super::without_window_layout(text),"default_template=Lemon Studio/Lemon Starter\nbrowser_favorites=[x]\nwindow_main=1,2,3,4,0\nheadphones_on=true\n");
+        let text="default_template=AQUILA/Lemon Starter\nwindow_mixer=1,2,3,4,0,0\nwindow_playlist_detached=1\nbrowser_favorites=[x]\nwindow_main=1,2,3,4,0\nheadphones_on=true\n";
+        assert_eq!(super::without_window_layout(text),"default_template=AQUILA/Lemon Starter\nbrowser_favorites=[x]\nwindow_main=1,2,3,4,0\nheadphones_on=true\n");
     }
 }
 // Project-specific window positions. An optional private chunk leaves legacy projects unchanged.

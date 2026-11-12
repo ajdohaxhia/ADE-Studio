@@ -16,7 +16,7 @@
 use std::path::PathBuf;
 
 /// The folder's own name inside the platform's per-user settings folder.
-const APP: &str = "Lemon Studio";
+const APP: &str = "AQUILA";
 /// Its name before the rename to Lemon Studio (`legacy_dir`).
 const LEGACY: &str = "OpenStudio";
 
@@ -42,7 +42,7 @@ pub fn legacy_dir() -> Option<PathBuf> {
 /// Public releases keep their normal executable name and profile. Explicit user-dir overrides still win.
 fn profile_name(exe: Option<&std::path::Path>) -> &'static str {
     if exe.and_then(|p|p.file_stem()).and_then(|n|n.to_str()).is_some_and(|n|n.eq_ignore_ascii_case("lemonstudio-development")) {
-        "Lemon Studio Public Preview"
+        "AQUILA Public Preview"
     } else { APP }
 }
 
@@ -99,8 +99,8 @@ mod tests {
 
     #[test]
     fn development_profile_is_isolated_for_direct_launch() {
-        assert_eq!(profile_name(Some(std::path::Path::new("lemonstudio-development.exe"))), "Lemon Studio Public Preview");
-        assert_eq!(profile_name(Some(std::path::Path::new("LEMONSTUDIO-DEVELOPMENT.exe"))), "Lemon Studio Public Preview");
+        assert_eq!(profile_name(Some(std::path::Path::new("lemonstudio-development.exe"))), "AQUILA Public Preview");
+        assert_eq!(profile_name(Some(std::path::Path::new("LEMONSTUDIO-DEVELOPMENT.exe"))), "AQUILA Public Preview");
         assert_eq!(profile_name(Some(std::path::Path::new("lemonstudio.exe"))), APP);
         assert_eq!(profile_name(None),APP);
     }

@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=ML Studio
+Name=AQUILA
 GenericName=Digital Audio Workstation
 Comment=Pattern-based music production
 Exec=lemonstudio %f

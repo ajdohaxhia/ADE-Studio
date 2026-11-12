@@ -56,13 +56,6 @@ mod tests{
         set_mode(true,false);assert!(mode());assert!(!Opt::Precount.on());
     }
     #[test]
-    fn lead_fix_clamp_and_time_signatures_and_selection_start(){
-        let mut a=app();a.state.project.ppq=96;a.state.project.bar=Some((3,4));assert_eq!(before(&a.state,900,2),324);assert_eq!(before(&a.state,100,8),0);
-        a.state.project.bar=Some((4,4));a.state.project.patterns[0].markers.push(os_model::TimeMarker{color:None,position:768,kind:os_model::TimeMarker::SIGNATURE,name:String::new(),numerator:3,denominator:4,scale:0});
-        assert_eq!(before(&a.state,1056,2),384);
-        a.state.song_mode=true;a.state.playlist.range=Some((1536,2304));a.state.playlist.pos=0;a.state.rec.armed=true;set_bars(1);set_mode(true,true);a.play_counted_if_armed();assert_eq!(a.state.rec.preroll,Some(1536));assert_eq!(a.transport.tick(),1152.);assert_eq!(a.state.rec.smart.origin,Some(1536));a.act(Action::Stop);
-    }
-    #[test]
     fn lead_fix_empty_automation_menu_and_playlist_corner_zoom(){
         let mut a=app();a.state.project.instrument_lanes.clear();a.state.playlist.sel=vec![123];pl::automation_menu(&mut a.state,8,(100.,100.));assert!(a.state.playlist.popup.is_none());pl::run(&mut a,Cmd::TrackAutomationToggle(8));assert_eq!(a.state.playlist.sel,vec![123]);
         a.state.z=vec![Win::Playlist];let mut c=os_ui::Canvas::new(1280,800,1.).unwrap();

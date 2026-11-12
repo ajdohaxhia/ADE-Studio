@@ -61,7 +61,7 @@ impl Default for LemonWave {
 }
 impl Plugin for LemonWave {
     const NAME: &'static str = "ML Wave";
-    const VENDOR: &'static str = "ML Studio";
+    const VENDOR: &'static str = "AQUILA";
     const URL: &'static str = "";
     const EMAIL: &'static str = "";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");

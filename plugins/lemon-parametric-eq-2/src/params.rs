@@ -361,7 +361,7 @@ pub fn to_fl(s: &Settings, extra: &[u8]) -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Plugin state <-> the original's saved state (for Lemon Studio: project slots hold the original's state)
+// Plugin state <-> the original's saved state (for AQUILA: project slots hold the original's state)
 
 /// The plugin's own saved state (nih-plug JSON with the u64 length prefix of its CLAP state) for a project slot's
 /// saved state `fl` (354 bytes, event 213).
@@ -391,7 +391,7 @@ pub fn plugin_state_from_fl(fl: &[u8]) -> Vec<u8> {
 
 /// The original's saved state for a plugin state blob (see [`plugin_state_from_fl`]); `None` when it is not one.
 pub fn fl_from_plugin_state(blob: &[u8]) -> Option<Vec<u8>> {
-    let json = if blob.len() > 8 && blob[0] != b'{' { &blob[8..] } else { blob };
+    let (_, json) = os_hostlink::state::json(blob);
     let text = std::str::from_utf8(json).ok()?;
     let v: serde_json::Value = serde_json::from_str(text).ok()?;
     let field = v.get("fields")?.get(STATE_FIELD)?.as_str()?;
@@ -455,7 +455,7 @@ mod tests {
         set_field(&mut fl, 29 + 6, -3); // Steep 8
         set_field(&mut fl, 36, 120); // main +1.2 dB
         set_byte(&mut fl, MASK_BYTE, 0x7b);
-        set_byte(&mut fl, 330, 0x5a); // a byte Lemon Studio does not use survives
+        set_byte(&mut fl, 330, 0x5a); // a byte AQUILA does not use survives
         let blob = plugin_state_from_fl(&fl);
         let back = fl_from_plugin_state(&blob).expect("parses");
         assert_eq!(back, fl);

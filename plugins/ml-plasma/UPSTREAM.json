@@ -7,7 +7,7 @@
   "license": "GPL-3.0-only",
   "modifications": [
     "ML plugin identity and editor branding",
-    "ML Studio palette",
+    "AQUILA palette",
     "private stock-plugin embedding and visibility",
     "isolated editor preferences",
     "capture host automation before saving native state",

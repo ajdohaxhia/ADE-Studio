@@ -1,4 +1,5 @@
 // Copyright (C) 2026 ItsAlphaNeon
+// Copyright (C) 2026 thacer13
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
@@ -47,10 +48,10 @@ pub fn native_first() -> bool {
     os_native::prefer_native()
 }
 
-/// Whether a channel or slot holding file id `id` is one a built-in Lemon recreation plays (3x Osc, Sytrus, the
-/// parametric EQ, Edison, Love Philter, Maximus, and the effects of `plugins::FL_RECREATIONS`).
+/// Whether a channel or slot holding file id `id` is one a built-in Lemon recreation plays (3x Osc, Sytrus, Ogun, Fruity Slicer, the
+/// parametric EQ, Edison, Love Philter, Maximus, FPC, and the effects of `plugins::FL_RECREATIONS`).
 pub fn has_recreation(id: &str) -> bool {
-    [crate::osc3::FILE_NAME, crate::citrus::FILE_NAME, crate::plugins::EQ_FILE_NAME, crate::plugins::EDISON_FILE_NAME, crate::plugins::LOVE_PHILTER_FILE_NAME, crate::plugins::MAXIMUS_FILE_NAME]
+    [crate::osc3::FILE_NAME, crate::citrus::FILE_NAME, crate::smith::FILE_NAME, crate::slicer::FILE_NAME, crate::plugins::EQ_FILE_NAME, crate::plugins::EDISON_FILE_NAME, crate::plugins::LOVE_PHILTER_FILE_NAME, crate::plugins::MAXIMUS_FILE_NAME, crate::drums::FILE_NAME]
         .iter()
         .any(|n| id.eq_ignore_ascii_case(n))
         || crate::plugins::recreation_of(id).is_some()
@@ -112,7 +113,9 @@ pub(crate) fn store_mixer_slots(proj: &mut Project, plugins: &Plugins, tracks: &
 
 fn store_hosted_inner(proj: &mut Project, plugins: &Plugins, recover: bool, include: impl Fn(usize) -> bool) -> Result<Vec<String>, String> {
     let mut warnings = Vec::new();
-    for key in plugins.hosted.keys().copied().filter(|&key| include(key)) {
+    // Containers keep their effects' states in their own slot state.
+    crate::container::store_members(proj, plugins);
+    for key in plugins.hosted.range(..crate::plugins::MEMBER_KEY).map(|(&k, _)| k).filter(|&key| include(key)) {
         if plugins.hosted.get(&key).is_some_and(|h|h.ara_saved.is_some()){continue;}
         let d = plugins.descriptor(key).ok_or_else(||format!("Plugin {key} is unavailable; previous saved settings preserved"))?;
         if d.format == Format::Native {
@@ -250,11 +253,17 @@ pub fn wrapped_slot(s: &SlotPlugin) -> Option<PluginRef> {
 }
 
 /// The input ports a mixer slot's wrapped plugin is saved with: its main and first auxiliary input bus, each the number
-/// of a track's input counted from 1, 0 for none (spec: audio/sidechain.md "Hosted plugins' input buses").
+/// of a track's input counted from 1, 0 for none (spec: audio/sidechain.md "Hosted plugins' input buses"). A Vocodex
+/// slot (played by Lemon Vocoder) feeds its sidechain bus the input its carrier selector names, or else its modulator
+/// selector's (spec: plugins/lemon-vocoder.md §1).
 pub fn slot_ports(project: &Project, track: usize, slot: usize) -> (usize, usize) {
     let Some(s) = project.mixer.iter().find(|m| usize::from(m.index) == track).and_then(|m| m.slots.get(slot)?.as_ref()) else {
         return (0, 0);
     };
+    if s.name.eq_ignore_ascii_case(crate::plugins::VOCODEX_FILE_NAME) {
+        let routing = os_engine::effects::vocoder::Settings::from_state(&s.state).unwrap_or_default().routing();
+        return (0, routing.key_input());
+    }
     if s.name != WRAPPER {
         return (0, 0);
     }
@@ -300,8 +309,7 @@ fn same_file(a: &std::path::Path, b: &str) -> bool {
 /// The plugin of `list` a wrapped plugin names: the same format and class id, else the same file and name, else the
 /// same format and name, else the same name (a copy in another format, which does not get the saved state:
 /// [`switched_format`]).
-#[cfg(test)]
-fn find(list: &[Available], r: &PluginRef) -> Option<usize> {
+pub fn find(list: &[Available], r: &PluginRef) -> Option<usize> {
     find_installed(list, r, &std::collections::HashSet::new())
 }
 
@@ -310,6 +318,7 @@ fn app_requires_substitute_approval(report:&crate::import_report::Report,other:&
 fn same_plugin_name(d: &Descriptor, saved: &str) -> bool {
     d.name == saved || (is_builtin(d) && d.name == crate::plugins::canonical_name(saved))
 }
+
 
 fn find_installed(list: &[Available], r: &PluginRef, missing: &std::collections::HashSet<String>) -> Option<usize> {
     let format = Format::parse(&r.format);
@@ -453,8 +462,10 @@ impl crate::app::App {
             .project
             .mixer
             .iter()
-            .flat_map(|m| m.slots.iter().enumerate().filter_map(move |(k, s)| Some((m.index, k as u8, wrapped_slot(s.as_ref()?)?))))
+            .flat_map(|m| m.slots.iter().enumerate().filter_map(move |(k, s)| Some((m.index, k as u8, s.as_ref()?))))
+            // Hosted and failed slots first: decoding a slot copies its whole saved state, and this runs every tick.
             .filter(|&(t, k, _)| !self.plugins.hosted.contains_key(&fx_key(t, k)) && !self.wrap_failed.contains(&fx_key(t, k)))
+            .filter_map(|(t, k, s)| Some((t, k, wrapped_slot(s)?)))
             .collect();
         for (t, k, r) in slots {
             if self.past_deadline() {
@@ -532,6 +543,11 @@ impl crate::app::App {
             .filter(|&r| !self.state.hosted_rows.contains(&r) && !self.wrap_failed.contains(&r) && !self.native_failed.contains(&r) && Some(r) != pending)
             .filter_map(|r| {
                 let ch = &self.state.project.channels[r];
+                // Lemon MIDI Out plays MIDI Out channels (`lemon_midi_out`), a container's chain a container's
+                // (`container`).
+                if crate::lemon_midi_out::is_midi_out(ch) || crate::container::is_container_channel(ch) {
+                    return None;
+                }
                 let name = ch.plugin.as_deref().filter(|n| ch.kind == ChannelKind::Plugin && !n.is_empty() && *n != WRAPPER)?;
                 Some((r, name.to_string(), ch.plugin_state.clone()))
             })
@@ -574,7 +590,7 @@ impl crate::app::App {
             // Before the states are copied: this runs every tick, and an Edison slot's can be tens of megabytes.
             .filter(|&(t, k, s)| {
                 let key = fx_key(t, k);
-                !s.name.is_empty() && s.name != WRAPPER && !self.plugins.hosted.contains_key(&key) && !self.native_failed.contains(&key)
+                !s.name.is_empty() && s.name != WRAPPER && s.name != crate::container::CONTAINER && !self.plugins.hosted.contains_key(&key) && !self.native_failed.contains(&key)
             })
             .map(|(t, k, s)| (t, k, s.name.clone(), s.state.clone()))
             .collect();
@@ -712,7 +728,7 @@ mod tests {
         let mut app=App::new(None);app.state.project=crate::app::test_project();app.plugins.effects=crate::plugins::builtin_effects();
         let index=app.plugins.effect_index(LEMON_EQ).unwrap();let d=app.plugins.effects[index].desc.clone();
         let r=plugin_ref(&d,vec![0xff]);let stored=wrapper::encode(None,&r);
-        app.state.project.mixer[1].slots[0]=Some(SlotPlugin{name:WRAPPER.into(),state:stored.clone()});
+        app.state.project.mixer[1].slots[0]=Some(SlotPlugin{id:os_model::Id::NONE,name:WRAPPER.into(),state:stored.clone()});
         app.sync_wrapped();assert!(!app.plugins.hosted.contains_key(&fx_key(1,0)));
         store_hosted(&mut app.state.project,&app.plugins).unwrap();
         assert_eq!(app.state.project.mixer[1].slots[0].as_ref().unwrap().state,stored);
@@ -736,7 +752,7 @@ mod tests {
         let mut fl = lemon_parametric_eq_2::params::default_state();
         lemon_parametric_eq_2::params::set_field(&mut fl, 1, -600);
         let eq = lemon_parametric_eq_2::params::plugin_state_from_fl(&fl);
-        a.state.project.mixer[3].slots[2] = Some(SlotPlugin { name: LEMON_EQ.into(), state: Vec::new() });
+        a.state.project.mixer[3].slots[2] = Some(SlotPlugin { id: os_model::Id::NONE, name: LEMON_EQ.into(), state: Vec::new() });
         a.plugins.create_effect(3, 2, a.plugins.effect_index(LEMON_EQ).unwrap(), Some(&eq)).unwrap();
         a.save_to(path.clone());
         assert!(a.state.message.as_deref().is_some_and(|m| m.starts_with("Saved") && !m.contains("not stored")), "{:?}", a.state.message);
@@ -798,7 +814,7 @@ mod tests {
 
     /// Lemon Studio's other effects are compiled in like the EQ but have no file plugin of their own to be saved as: a
     /// slot hosting one is saved wrapped with its state, and the reopened project hosts the built-in copy again with
-    /// that state (Tesla's is its sample: its parameters are only its transport).
+    /// that state (Tesla's is its sample: its parameters are only its transport; Lemon Drop's is its display state).
     #[test]
     fn linked_effects_hall_visibility_keeps_host_available(){
         let mut a=App::new(None);a.plugins.effects=crate::plugins::builtin_effects();
@@ -880,14 +896,24 @@ mod tests {
             ..Default::default()
         });
         let tesla_frames_of = |st: Option<Vec<u8>>| st.and_then(|b| tesla::state::from_plugin_state(&b)).map(|s| s.sample.frames());
+        // Lemon Drop's settings are its saved state (its one parameter is the display's hold switch).
+        let drop_state = lemon_drop::plugin_state_from_fl(&lemon_drop::state::State { gain: 42, ..Default::default() }.to_bytes());
+        let drop_gain_of = |st: Option<Vec<u8>>| st.and_then(|b| lemon_drop::fl_from_plugin_state(&b)).map(|f| lemon_drop::state_of(&f).gain);
         let mut set = Vec::new();
         for (k, name) in LINKED_EFFECTS.iter().enumerate() {
             let (t, slot) = at(k);
             a.state.project.mixer[usize::from(t)].slots[usize::from(slot)] = Some(crate::plugins::new_slot(name));
             let tesla = *name == crate::plugins::TESLA;
-            a.plugins.create_effect(t, slot, a.plugins.effect_index(name).unwrap(), tesla.then_some(tesla_state.as_slice())).unwrap();
+            let drop = *name == crate::plugins::LEMON_DROP;
+            let start = if tesla { Some(tesla_state.as_slice()) } else if drop { Some(drop_state.as_slice()) } else { None };
+            a.plugins.create_effect(t, slot, a.plugins.effect_index(name).unwrap(), start).unwrap();
             if tesla {
                 assert_eq!(tesla_frames_of(a.plugins.state(key(k))), Some(tesla_frames));
+                set.push((u32::MAX, 0.0));
+                continue;
+            }
+            if drop {
+                assert_eq!(drop_gain_of(a.plugins.state(key(k))), Some(42));
                 set.push((u32::MAX, 0.0));
                 continue;
             }
@@ -923,6 +949,10 @@ mod tests {
             assert!(b.plugins.descriptor(key(k)).is_some_and(|d| is_builtin(&d)), "{name} hosted, built in");
             if *name == crate::plugins::TESLA {
                 assert_eq!(tesla_frames_of(b.plugins.state(key(k))), Some(tesla_frames), "Tesla kept its sample");
+                continue;
+            }
+            if *name == crate::plugins::LEMON_DROP {
+                assert_eq!(drop_gain_of(b.plugins.state(key(k))), Some(42), "Lemon Drop kept its state");
                 continue;
             }
             assert_eq!(b.plugins.param_value(key(k), set[k].0), Some(set[k].1), "{name} kept its setting");
@@ -1069,7 +1099,7 @@ mod tests {
         let key=fx_key(2,0);
         let plugin:os_host::SharedPlugin=std::sync::Arc::new(std::sync::Mutex::new(NativeStandIn(desc.clone(),vec![9,8,7],true)));
         app.plugins.hosted.insert(key,Hosted::new(plugin));
-        app.state.project.mixer[2].slots[0]=Some(SlotPlugin{name:desc.name.clone(),state:vec![]});
+        app.state.project.mixer[2].slots[0]=Some(SlotPlugin{id:os_model::Id::NONE,name:desc.name.clone(),state:vec![]});
         app.plugins.state_fail.insert(key);
         app.save_to(file.clone());
         assert!(file.exists(),"{:?}",app.state.message);
@@ -1120,7 +1150,7 @@ mod tests {
         assert!(a.state.message.as_deref().is_some_and(|m| m.starts_with("Saved")), "{:?}", a.state.message);
         let saved = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let _ = std::fs::remove_file(&path);
-        assert_eq!(saved.mixer[2].slots[1], Some(SlotPlugin { name: "Fruity Balance".into(), state: vec![9, 8, 7, 6] }));
+        assert_eq!(saved.mixer[2].slots[1], Some(SlotPlugin { id: os_model::Id::NONE, name: "Fruity Balance".into(), state: vec![9, 8, 7, 6] }));
         assert_eq!(a.state.project.mixer[2].slots[1], saved.mixer[2].slots[1]);
     }
 
@@ -1141,10 +1171,10 @@ mod tests {
         a.state.project.channels[harmor].plugin_state = Some(vec![1, 2, 3]);
         let sytrus = crate::app::add_plugin_channel(&mut a.state.project, "Sytrus");
         a.state.project.channels[sytrus].plugin_state = Some(vec![4]);
-        a.state.project.mixer[2].slots[1] = Some(SlotPlugin { name: "Fruity Balance".into(), state: vec![5, 6] });
-        a.state.project.mixer[3].slots[0] = Some(SlotPlugin { name: "Gross Beat".into(), state: vec![7, 8, 9] });
+        a.state.project.mixer[2].slots[1] = Some(SlotPlugin { id: os_model::Id::NONE, name: "Fruity Balance".into(), state: vec![5, 6] });
+        a.state.project.mixer[3].slots[0] = Some(SlotPlugin { id: os_model::Id::NONE, name: "Gross Beat".into(), state: vec![7, 8, 9] });
         // A file id in another case than the folder name (files store `Fruity slicer`).
-        a.state.project.mixer[4].slots[0] = Some(SlotPlugin { name: "fruity balance".into(), state: vec![] });
+        a.state.project.mixer[4].slots[0] = Some(SlotPlugin { id: os_model::Id::NONE, name: "fruity balance".into(), state: vec![] });
         let (balance, gross, lower) = (fx_key(2, 1), fx_key(3, 0), fx_key(4, 0));
 
         a.host_native();
@@ -1171,17 +1201,17 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         assert_eq!((saved.channels[harmor].plugin.as_deref(), saved.channels[harmor].plugin_state.as_deref()), (Some("Harmor"), Some(&[11, 12][..])));
         assert_eq!((saved.channels[sytrus].plugin.as_deref(), saved.channels[sytrus].plugin_state.as_deref()), (Some("Sytrus"), Some(&[4][..])));
-        assert_eq!(saved.mixer[2].slots[1], Some(SlotPlugin { name: "Fruity Balance".into(), state: vec![13] }));
-        assert_eq!(saved.mixer[3].slots[0], Some(SlotPlugin { name: "Gross Beat".into(), state: vec![7, 8, 9] }));
+        assert_eq!(saved.mixer[2].slots[1], Some(SlotPlugin { id: os_model::Id::NONE, name: "Fruity Balance".into(), state: vec![13] }));
+        assert_eq!(saved.mixer[3].slots[0], Some(SlotPlugin { id: os_model::Id::NONE, name: "Gross Beat".into(), state: vec![7, 8, 9] }));
         // The file's own spelling of the id is kept; the instance's state (its defaults) is written.
-        assert_eq!(saved.mixer[4].slots[0], Some(SlotPlugin { name: "fruity balance".into(), state: vec![0, 0] }));
+        assert_eq!(saved.mixer[4].slots[0], Some(SlotPlugin { id: os_model::Id::NONE, name: "fruity balance".into(), state: vec![0, 0] }));
     }
 
     #[test]
     fn import_native_user_edits_save_without_overwriting_untouched_original_state(){
         let mut app=App::new(None);app.state.project=crate::app::test_project();
         app.plugins.effects=vec![native_stand_in("Gross Beat",os_host::Kind::Effect,false)];
-        app.state.project.mixer[3].slots[0]=Some(SlotPlugin{name:"Gross Beat".into(),state:vec![7,8,9]});
+        app.state.project.mixer[3].slots[0]=Some(SlotPlugin{id:os_model::Id::NONE,name:"Gross Beat".into(),state:vec![7,8,9]});
         app.host_native();let key=fx_key(3,0);assert!(app.plugins.hosted[&key].keep_file_state);
         let mut untouched=app.state.project.clone();store_for_save(&mut untouched,&app.plugins).unwrap();assert_eq!(untouched.mixer[3].slots[0].as_ref().unwrap().state,vec![7,8,9]);
         assert!(app.plugins.set_state(key,&[14]));app.plugins.mark_edited(key);
@@ -1209,7 +1239,7 @@ mod tests {
         a.state.project.channels[row].plugin_state = Some(osc_file.clone());
         let mut eq_file = lemon_parametric_eq_2::params::default_state();
         lemon_parametric_eq_2::params::set_field(&mut eq_file, 1, -600);
-        a.state.project.mixer[2].slots[1] = Some(SlotPlugin { name: EQ_FILE_NAME.into(), state: eq_file.clone() });
+        a.state.project.mixer[2].slots[1] = Some(SlotPlugin { id: os_model::Id::NONE, name: EQ_FILE_NAME.into(), state: eq_file.clone() });
         let slot = fx_key(2, 1);
         let builtin_at = |a: &App, key| a.plugins.descriptor(key).is_some_and(|d| is_builtin(&d));
         let native_at = |a: &App, key| a.plugins.descriptor(key).is_some_and(|d| d.format == Format::Native);
@@ -1285,7 +1315,7 @@ mod tests {
             path: format!("C:/Plugins/{file}"),
             state: eq.clone(),
         };
-        let slot = |r: &PluginRef| Some(SlotPlugin { name: WRAPPER.into(), state: wrapper::encode(None, r) });
+        let slot = |r: &PluginRef| Some(SlotPlugin { id: os_model::Id::NONE, name: WRAPPER.into(), state: wrapper::encode(None, r) });
         a.state.project.mixer[2].slots[0] = slot(&saved_as("vst2", LEMON_EQ, "Lemon EQ.dll"));
         a.state.project.mixer[3].slots[0] = slot(&saved_as("clap", LEMON_EQ, "Lemon EQ.clap"));
         let row = crate::app::add_plugin_channel(&mut a.state.project, WRAPPER);
@@ -1353,7 +1383,7 @@ mod tests {
         let mut app=App::new(None);app.state.project=crate::app::test_project();app.plugins.effects=crate::plugins::builtin_effects();
         app.import_report.source=Some("Imported.flp".into());
         let r=PluginRef{format:"vst2".into(),name:LEMON_EQ.into(),id:"4c455132".into(),vendor:String::new(),path:"C:/Plugins/Old.dll".into(),state:vec![1,2,3]};
-        let wrapper=SlotPlugin{name:WRAPPER.into(),state:wrapper::encode(None,&r)};app.state.project.mixer[2].slots[0]=Some(wrapper.clone());let key=fx_key(2,0);
+        let wrapper=SlotPlugin{id:os_model::Id::NONE,name:WRAPPER.into(),state:wrapper::encode(None,&r)};app.state.project.mixer[2].slots[0]=Some(wrapper.clone());let key=fx_key(2,0);
         app.sync_wrapped();assert!(!app.plugins.hosted.contains_key(&key));assert!(app.import_report.substitutes.contains_key(&key));
         crate::import_report::approve(&mut app);app.sync_wrapped();assert!(app.plugins.hosted[&key].stand_in);
         let mut saved=app.state.project.clone();store_for_save(&mut saved,&app.plugins).unwrap();assert_eq!(saved.mixer[2].slots[0],Some(wrapper));

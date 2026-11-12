@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The matching Gridline-derived engine travels inside each ML Studio update.
+//! The matching Gridline-derived engine travels inside each AQUILA update.
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{
@@ -141,7 +141,7 @@ pub fn bundle_path() -> Result<PathBuf, String> {
     static PATH: OnceLock<Result<PathBuf, String>> = OnceLock::new();
     PATH.get_or_init(|| {
         let root = os_paths::user_dir()
-            .ok_or("ML Studio user directory is unavailable")?
+            .ok_or("AQUILA user directory is unavailable")?
             .join("Builtin Plugins")
             .join("ML Plasma");
         unpack(BYTES, &root)
@@ -156,7 +156,7 @@ pub fn library() -> Result<std::sync::Arc<os_clap::Library>, String> {
         if library.plugins.len() != 1
             || library.plugins[0].id != ID
             || library.plugins[0].name != NAME
-            || library.plugins[0].vendor != "ML Studio"
+            || library.plugins[0].vendor != "AQUILA"
         {
             return Err("ML Plasma payload has an unexpected instrument identity".into());
         }
@@ -168,7 +168,7 @@ pub fn library() -> Result<std::sync::Arc<os_clap::Library>, String> {
 pub fn is_builtin(d: &os_host::Descriptor) -> bool {
     d.format == os_host::Format::Clap
         && d.id == ID
-        && d.vendor == "ML Studio"
+        && d.vendor == "AQUILA"
         && bundle_path().is_ok_and(|path| path == d.path)
 }
 

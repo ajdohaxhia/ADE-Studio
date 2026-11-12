@@ -122,15 +122,45 @@ pub fn first(spec: &Spec) -> usize {
     usize::from(spec.version.is_some())
 }
 
-/// The int (after the version field) setting `k` is.
+/// In [`Spec::fields`]: the setting is not an int but bit 0 of the byte right after the ints (Fruity Filter's Center),
+/// read as 0 from a state without that byte (an earlier version).
+pub const BYTE: usize = byte(0);
+
+/// In [`Spec::fields`]: bit 0 of the `n`-th byte after the ints (Fruity Peak Controller's Mute and Ramp: `byte(0)`,
+/// `byte(1)`), read as 0 from a state without that byte.
+pub const fn byte(n: usize) -> usize {
+    usize::MAX - n
+}
+
+/// The byte after the ints a field of [`Spec::fields`] is, if it is one.
+fn byte_of(i: usize) -> Option<usize> {
+    (i > usize::MAX - 16).then(|| usize::MAX - i)
+}
+
+/// The int (after the version field) setting `k` is ([`BYTE`] for the byte after the ints).
 pub fn int_of(spec: &Spec, k: usize) -> usize {
     spec.fields.get(k).copied().unwrap_or(k)
 }
 
-/// The ints the saved state has for its settings (after the version field): one per setting, and those the
-/// description leaves out.
+/// The ints the saved state has for its settings (after the version field): one per setting but a [`BYTE`] one, and
+/// those the description leaves out.
 pub fn ints(spec: &Spec) -> usize {
-    spec.fields.iter().map(|&i| i + 1).max().unwrap_or(0).max(spec.settings.len())
+    let bytes = spec.fields.iter().filter(|&&i| byte_of(i).is_some()).count();
+    spec.fields.iter().filter(|&&i| byte_of(i).is_none()).map(|&i| i + 1).max().unwrap_or(0).max(spec.settings.len() - bytes)
+}
+
+/// Where the settings' ints start in `b`: after the version and the head, or where the description finds them
+/// ([`Spec::locate`]); `None` when it cannot.
+pub fn base(spec: &Spec, b: &[u8]) -> Option<usize> {
+    match spec.locate {
+        Some(f) => f(b),
+        None => Some(4 * first(spec)),
+    }
+}
+
+/// Where the `n`-th byte setting is: that byte after the ints.
+fn byte_at(spec: &Spec, b: &[u8], n: usize) -> usize {
+    base(spec, b).unwrap_or(usize::MAX / 2) + 4 * ints(spec) + n
 }
 
 /// The shortest readable saved state: the version field, if any, and the settings' ints.
@@ -142,16 +172,40 @@ pub fn state_len(spec: &Spec) -> usize {
 /// version is read), gives the start.
 pub fn normalized(spec: &Spec, b: Vec<u8>) -> Vec<u8> {
     let version_read = spec.any_version || spec.version.is_none_or(|v| field(&b, 0) <= v);
-    if b.len() >= state_len(spec) && version_read { b } else { default_state(spec) }
+    let whole = base(spec, &b).is_some_and(|o| b.len() >= o + 4 * ints(spec));
+    if whole && b.len() >= state_len(spec) && version_read { b } else { default_state(spec) }
 }
 
 /// Setting `k`'s stored value.
 pub fn setting(spec: &Spec, b: &[u8], k: usize) -> i32 {
-    field(b, first(spec) + int_of(spec, k))
+    let i = int_of(spec, k);
+    match byte_of(i) {
+        Some(n) => b.get(byte_at(spec, b, n)).map_or(0, |x| i32::from(x & 1)),
+        None => base(spec, b).map_or(0, |o| int_at(b, o + 4 * i)),
+    }
 }
 
+/// Writes setting `k` (a [`BYTE`] setting only where the state has its byte; the other bits of it are kept).
 pub fn set_setting(spec: &Spec, b: &mut [u8], k: usize, v: i32) {
-    set_field(b, first(spec) + int_of(spec, k), v);
+    let i = int_of(spec, k);
+    match byte_of(i) {
+        Some(n) => {
+            let at = byte_at(spec, b, n);
+            if let Some(x) = b.get_mut(at) {
+                *x = (*x & !1) | (v & 1) as u8;
+            }
+        }
+        None => {
+            if let Some(s) = base(spec, b).and_then(|o| b.get_mut(o + 4 * i..o + 4 * i + 4)) {
+                s.copy_from_slice(&v.to_le_bytes());
+            }
+        }
+    }
+}
+
+/// The little-endian int32 at byte `o`.
+fn int_at(b: &[u8], o: usize) -> i32 {
+    b.get(o..o + 4).map_or(0, |s| i32::from_le_bytes(s.try_into().unwrap()))
 }
 
 /// Little-endian int32 field `k`.
@@ -167,6 +221,9 @@ pub fn set_field(b: &mut [u8], k: usize, v: i32) {
 
 /// A new instance's saved state (the version, every setting at its start, an int left out at 0, the tail).
 pub fn default_state(spec: &Spec) -> Vec<u8> {
+    if let Some(blank) = spec.blank {
+        return blank();
+    }
     let start = |i: usize| (0..spec.settings.len()).find(|&k| int_of(spec, k) == i).map_or(0, |k| spec.settings[k].start);
     let starts = (0..ints(spec)).flat_map(|i| start(i).to_le_bytes());
     spec.version.iter().flat_map(|v| v.to_le_bytes()).chain(starts).chain(spec.tail.iter().copied()).collect()
@@ -184,6 +241,13 @@ pub fn to_fl(spec: &Spec, vals: &[i32], raw: &[u8]) -> Vec<u8> {
     let mut b = normalized(spec, raw.to_vec());
     for (k, &v) in vals.iter().enumerate().take(spec.settings.len()) {
         if decode(spec, k, setting(spec, &b, k)) != v {
+            // A state of the version before the byte gains it, and the version that has it.
+            if let Some(n) = byte_of(int_of(spec, k)).filter(|&n| b.len() <= byte_at(spec, &b, n)) {
+                b.resize(byte_at(spec, &b, n) + 1, 0);
+                if let Some(version) = spec.version {
+                    set_field(&mut b, 0, version);
+                }
+            }
             set_setting(spec, &mut b, k, v);
         }
     }
@@ -196,7 +260,7 @@ pub fn values_of(spec: &Spec, fl: &[u8]) -> Vec<i32> {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Snapping (Lemon Studio choice, spec §4 of each plugin page)
+// Snapping (AQUILA choice, spec §4 of each plugin page)
 
 /// Where a drag at the stored value `plain` lands: on the setting's magnet when within `MAGNET_ZONE` of its range;
 /// `None` = where the drag is.
@@ -216,11 +280,20 @@ pub fn snap_step(spec: &Spec, k: usize, v: i32, next: i32) -> i32 {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Value texts shared by the effects (Lemon Studio choices, spec §3 of each plugin page)
+// Value texts shared by the effects (AQUILA choices, spec §3 of each plugin page)
 
 /// A gain as `<dB>dB` with one decimal (`-INFdB` for silence).
 pub fn db_text(gain: f32) -> String {
     if gain <= 0.0 { "-INFdB".into() } else { format!("{:.1}dB", 20.0 * f64::from(gain).log10()) }
+}
+
+/// As [`db_text`], with levels just under unity (that round to -0.0) shown as 0.0dB, so the text typed back gives a
+/// value with the same text.
+pub fn db_text_fine(gain: f32) -> String {
+    match db_text(gain) {
+        t if t == "-0.0dB" => "0.0dB".into(),
+        t => t,
+    }
 }
 
 /// The number a typed text starts with.
@@ -262,6 +335,19 @@ pub fn parse_db(range: (i32, i32), s: &str, gain: impl Fn(i32) -> f32) -> Option
     })
 }
 
+/// As [`parse_db`], for a `gain` that never falls as the value rises (a binary search: for the long ranges).
+pub fn parse_db_rising(range: (i32, i32), s: &str, gain: impl Fn(i32) -> f32) -> Option<i32> {
+    let s = s.trim().to_ascii_lowercase();
+    if s.contains("inf") || s == "off" {
+        return (gain(range.0) <= 0.0).then_some(range.0);
+    }
+    let x = leading_number(&s)?;
+    Some(nearest_rising(range, x, |v| {
+        let g = gain(v);
+        if g > 0.0 { 20.0 * f64::from(g).log10() } else { f64::NEG_INFINITY }
+    }))
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Plugin state <-> the original's saved state
 
@@ -283,7 +369,7 @@ pub fn plugin_state_from_fl(spec: &Spec, fl: &[u8]) -> Vec<u8> {
 
 /// The original's saved state for a plugin state blob (see [`plugin_state_from_fl`]); `None` when it is not one.
 pub fn fl_from_plugin_state(spec: &Spec, blob: &[u8]) -> Option<Vec<u8>> {
-    let json = if blob.len() > 8 && blob[0] != b'{' { &blob[8..] } else { blob };
+    let (_, json) = os_hostlink::state::json(blob);
     let v: serde_json::Value = serde_json::from_str(std::str::from_utf8(json).ok()?).ok()?;
     let raw = normalized(spec, from_hex(v.get("fields")?.get(STATE_FIELD)?.as_str()?.trim_matches('"'))?);
     let params = v.get("params")?;
@@ -299,13 +385,15 @@ pub fn fl_from_plugin_state(spec: &Spec, blob: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{balance, chorus, fast_distortion, soft_clipper, stereo_enhancer, stereo_shaper, transient_processor};
+    use crate::{balance, chorus, fast_distortion, flanger, phaser, soft_clipper, stereo_enhancer, stereo_shaper, transient_processor};
 
     #[test]
     fn a_new_instance_starts_on_the_originals_default_and_its_state_reads_back() {
         for spec in crate::tests::SPECS {
             let b = default_state(spec);
-            assert_eq!(b.len(), state_len(spec) + spec.tail.len());
+            if spec.blank.is_none() {
+                assert_eq!(b.len(), state_len(spec) + spec.tail.len());
+            }
             assert_eq!(values_of(spec, &b), spec.start());
             let p = FxParams::new(spec);
             assert_eq!(p.param_map().len(), spec.settings.len());
@@ -323,6 +411,9 @@ mod tests {
         );
         assert_eq!(default_state(chorus::SPEC), os_engine::effects::chorus::Settings::default().to_state());
         assert_eq!(default_state(stereo_shaper::SPEC), os_engine::effects::stereo_shaper::Settings::default().to_state());
+        assert_eq!(default_state(crate::filter::SPEC), os_engine::effects::filter::Settings::default().to_state());
+        assert_eq!(default_state(flanger::SPEC), os_engine::effects::flanger::Settings::default().to_state());
+        assert_eq!(default_state(phaser::SPEC), os_engine::effects::phaser::Settings::default().to_state());
     }
 
     /// Lemon Stereo Shaper leaves the difference output (int 6 after the version) out of its settings: it is kept as

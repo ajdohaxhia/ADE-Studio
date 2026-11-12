@@ -112,36 +112,21 @@ fn covered(r: [i32; 4], screens: &[[i32; 4]]) -> bool {
 /// Window `w`'s rectangle while it floats (the Playlist, Mixer and Piano roll as `State::float_rect` keeps them);
 /// `None` for the browser panel and docked plugin windows.
 pub fn rect_of(s: &State, w: Win) -> Option<Rect> {
-    Some(match w {
-        Win::ChannelRack => views::rack::rect(s),
-        Win::Plugin => views::channel_win::rect(s),
-        Win::Perf => views::perf::rect(s),
-        Win::Tapper => views::tapper::rect(s),
-        Win::Touch => views::touch::rect(s),
-        Win::Strum => views::strum::rect(s),
-        Win::Arp => views::arpeggiate::rect(s),
-        Win::PianoDlg => views::piano_dlg::rect(s),
-        w if w.slot().is_some() => s.float_rect(w),
-        _ => return None,
-    })
+    match crate::floating::placed(w) {
+        Some(p) => Some((p.rect)(s)),
+        None => w.slot().map(|_| s.float_rect(w)),
+    }
 }
 
+/// Windows sit on whole px: a mouse at a fractional display scale (125 %) moves in fractions of one, and parts of a
+/// window worked out two ways then disagree by a rounding (the playlist's scroll parts, a debug assertion).
 fn set_pos(s: &mut State, w: Win, pos: (f32, f32)) {
-    match w {
-        Win::ChannelRack => s.rack_pos = pos,
-        Win::Plugin => s.plugin_pos = pos,
-        Win::Perf => s.perf.pos = pos,
-        Win::Tapper => s.tapper.pos = pos,
-        Win::Touch => s.touch.pos = pos,
-        Win::Strum => s.strum.pos = pos,
-        Win::Arp => s.arp.pos = pos,
-        Win::PianoDlg => s.piano_dlg.pos[s.piano_dlg.tool.index()] = pos,
-        w => {
-            if let Some(i) = w.slot() {
-                s.wins[i].rect.x = pos.0;
-                s.wins[i].rect.y = pos.1;
-            }
-        }
+    let pos = (pos.0.round(), pos.1.round());
+    if let Some(p) = crate::floating::placed(w) {
+        (p.set_pos)(s, pos);
+    } else if let Some(i) = w.slot() {
+        s.wins[i].rect.x = pos.0;
+        s.wins[i].rect.y = pos.1;
     }
 }
 
@@ -333,7 +318,7 @@ pub fn keep_all(s: &mut State) -> bool {
         return false;
     }
     let mut moved = false;
-    for w in [Win::ChannelRack, Win::Plugin, Win::Perf, Win::Tapper, Win::Touch, Win::Strum, Win::Arp, Win::PianoDlg] {
+    for w in crate::floating::PLACED.iter().map(|p| p.win) {
         let Some(r) = rect_of(s, w) else { continue };
         let pos = keep(r.x, r.y, r.w, work);
         if pos != (r.x, r.y) {
@@ -367,7 +352,7 @@ impl App {
         if r.h > work.h {
             s.rack_size.1 = fit.1;
         }
-        for w in [Win::ChannelRack, Win::Plugin, Win::Perf, Win::Tapper, Win::Touch, Win::Strum, Win::Arp, Win::PianoDlg] {
+        for w in crate::floating::PLACED.iter().map(|p| p.win) {
             if let Some(r) = rect_of(s, w) {
                 let to = inside(r, work, (r.w, r.h));
                 set_pos(s, w, (to.x, to.y));
@@ -504,9 +489,34 @@ mod tests {
         assert_eq!(snap(Rect::new(794.0, 695.0, 200.0, 100.0)), (800.0, 700.0));
     }
 
+    /// A window dragged by its title bar at a fractional display scale (the mouse in steps of 0.8 px at 125 %) lands on
+    /// whole px: the floating playlist painted at a fractional place tripped its scroll parts' debug assertion.
+    #[test]
+    fn dragged_windows_land_on_whole_px() {
+        let Ok(mut c) = Canvas::new(1400, 800, 1.0) else { return };
+        let mut app = App::new(None);
+        app.state.screen = (1400.0, 800.0);
+        app.state.raise(Win::Playlist);
+        let i = Win::Playlist.slot().unwrap();
+        app.state.wins[i].maxed = false;
+        app.state.wins[i].rect = Rect::new(230.0, 110.0, 820.0, 430.0);
+        app.paint(&mut c, None);
+        app.mouse_move(500.0, 120.0);
+        app.mouse_down();
+        for k in 1..30 {
+            app.mouse_move(500.0 + k as f32 * 0.8, 120.0 + k as f32 * 0.8);
+            let _ = app.take_damage();
+            app.paint(&mut c, None);
+            let r = app.state.wins[i].rect;
+            assert_eq!((r.x.fract(), r.y.fract()), (0.0, 0.0), "{r:?}");
+        }
+        app.mouse_up();
+        assert_ne!(app.state.wins[i].rect.x, 230.0, "it moved");
+    }
+
     const WORK: Rect = Rect { x: 209.0, y: 83.0, w: 1711.0, h: 997.0 };
 
-    /// Spec "Lemon Studio": at least 31 px of the width stays inside the workspace at the left and at the right, the
+    /// Spec "AQUILA": at least 31 px of the width stays inside the workspace at the left and at the right, the
     /// top at least 15 px above the workspace's bottom, the title bar never above the workspace's top.
     #[test]
     fn plugin_title_recovery_keeps_a_drag_target() {
@@ -551,7 +561,7 @@ mod tests {
         assert_eq!(keep_px((9000, 9000), 750, work, 1.5), (2880 - 47, 1620 - 23));
     }
 
-    /// Spec "Lemon Studio": Into workspace moves a window fully back in, keeping its size where it fits.
+    /// Spec "AQUILA": Into workspace moves a window fully back in, keeping its size where it fits.
     #[test]
     fn inside_moves_and_keeps_the_size() {
         let r = Rect::new(-300.0, 200.0, 500.0, 400.0);
@@ -564,7 +574,7 @@ mod tests {
         assert_eq!(inside_px([-100, 50, 400, 450], [0, 100, 1000, 800]), (0, 100));
     }
 
-    /// Spec "Lemon Studio", detached windows with the check off: the title bar stays on the screens. Two side-by-side
+    /// Spec "AQUILA", detached windows with the check off: the title bar stays on the screens. Two side-by-side
     /// screens (as measured), the right one shorter.
     #[test]
     fn detached_title_bars_stay_on_the_screens() {
@@ -651,7 +661,7 @@ mod tests {
         rect_of(&app.state, w).expect("a floating window")
     }
 
-    /// Spec "Lemon Studio": dragged by the title bar far past each edge, every window keeps its part in the
+    /// Spec "AQUILA": dragged by the title bar far past each edge, every window keeps its part in the
     /// workspace: 31 px at the left and right, its top 15 px above the bottom, never above the top.
     #[test]
     fn dragged_windows_keep_their_part() {
@@ -671,7 +681,7 @@ mod tests {
         }
     }
 
-    /// Spec "Lemon Studio": the strip kept at the left (and at the right, and at the bottom) can be grabbed: every part
+    /// Spec "AQUILA": the strip kept at the left (and at the right, and at the bottom) can be grabbed: every part
     /// of the title bar in it that isn't a button starts a move, and dragging it brings the window back.
     #[test]
     fn the_kept_strip_drags_back() {
@@ -706,7 +716,7 @@ mod tests {
         }
     }
 
-    /// Spec "Lemon Studio": VIEW ▸ Into workspace moves every window that is partly outside fully back in, keeping its
+    /// Spec "AQUILA": VIEW ▸ Into workspace moves every window that is partly outside fully back in, keeping its
     /// size where it fits; windows inside stay where they are.
     #[test]
     fn into_workspace_brings_every_window_back() {
@@ -749,7 +759,7 @@ mod tests {
         assert_eq!(app.state.rack_size, crate::views::rack::snap_size(&app.state, r.w, r.h));
     }
 
-    /// Spec "Lemon Studio": the clamp holds whatever "Don't limit windows to screen" says; the check is declared, off
+    /// Spec "AQUILA": the clamp holds whatever "Don't limit windows to screen" says; the check is declared, off
     /// by default.
     #[test]
     fn the_check_leaves_inner_windows_alone() {
@@ -778,7 +788,7 @@ mod tests {
         }
     }
 
-    /// Spec "Lemon Studio": a smaller main window or a wider browser keeps every window's part in the workspace.
+    /// Spec "AQUILA": a smaller main window or a wider browser keeps every window's part in the workspace.
     #[test]
     fn a_shrinking_workspace_keeps_the_part() {
         let Some(mut c) = canvas(1920, 1080) else { return };

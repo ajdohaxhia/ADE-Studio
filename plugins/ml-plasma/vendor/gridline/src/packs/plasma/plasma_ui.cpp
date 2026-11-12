@@ -1,4 +1,4 @@
-// ML Studio adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
+// AQUILA adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
 // Gridline â€” "plasma" pack: editor basics (see plasma_ui.h): palette, shared
 // controls (dials with link bands, value bars, fields, chips, switches, cards,
 // drop-downs, steppers, curve editor), links by drag and drop and Link mode,
@@ -89,7 +89,7 @@ Pal makePal(const theme::Palette& T) {
   p.textDim = T.textDim;
   p.textFaint = T.textFaint;
   p.label = mix(T.text, T.textDim, 0.45f);
-  // ML Studio: charcoal panels, warm lemon focus, cyan displays, violet modulation.
+  // AQUILA: charcoal panels, warm lemon focus, cyan displays, violet modulation.
   if (d) {
     p.frame = rgb(0x17191D); p.panel = rgb(0x292C32); p.panelHi = rgb(0x30343B);
     p.panelLo = rgb(0x202329); p.head = rgb(0x34383F); p.headOn = rgb(0x41464F);

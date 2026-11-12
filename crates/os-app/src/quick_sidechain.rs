@@ -96,8 +96,7 @@ pub fn run(app: &mut App, dst: u16) -> Option<String> {
             }
         }
     }
-    m.slots[slot as usize] = Some(os_model::SlotPlugin {
-        name: os_flp::wrapper::WRAPPER.into(),
+    m.slots[slot as usize] = Some(os_model::SlotPlugin { id: os_model::Id::NONE, name: os_flp::wrapper::WRAPPER.into(),
         state: wrapper,
     });
     m.slot_on[slot as usize] = true;
@@ -132,13 +131,11 @@ mod tests {
         crate::playlist::arr_mut(&mut a.state);
         let source_routes = a.state.project.mixer[3].routes.clone();
         a.state.project.mixer[1].routes.push(2); // Already input 1; trigger must become input 2.
-        let original = os_model::SlotPlugin {
-            name: "Keep me".into(),
+        let original = os_model::SlotPlugin { id: os_model::Id::NONE, name: "Keep me".into(),
             state: vec![1, 2, 3],
         };
         a.state.project.mixer[2].slots[9] = Some(original.clone());
-        let eq = os_model::SlotPlugin {
-            name: "Fruity Parametric EQ 2".into(),
+        let eq = os_model::SlotPlugin { id: os_model::Id::NONE, name: "Fruity Parametric EQ 2".into(),
             state: lemon_parametric_eq_2::params::default_state(),
         };
         a.state.project.mixer[2].slots[10] = Some(eq.clone());

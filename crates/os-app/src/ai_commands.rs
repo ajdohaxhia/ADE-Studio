@@ -644,7 +644,7 @@ fn execute(app: &mut App, name: &str, a: &Value) -> Result<Value> {
                 "redo" => history::redo(&mut app.state),
                 _ => return Err("Expected undo or redo".into()),
             };
-            let label = changed.map(str::to_string);
+            let label = changed;
             app.sync_live();
             app.invalidate();
             return Ok(json!({"changed":label}));
@@ -708,7 +708,7 @@ fn execute(app: &mut App, name: &str, a: &Value) -> Result<Value> {
             }
             _ => return Err("Unknown automation operation".into()),
         },
-        _ => return Err("Unknown ML Studio tool".into()),
+        _ => return Err("Unknown AQUILA tool".into()),
     }
     app.state.piano.dirty = true;
     Ok(json!({"ok":true,"dialog_open":app.modal_open(),"message":app.state.message}))

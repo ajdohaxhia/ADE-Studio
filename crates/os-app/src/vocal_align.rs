@@ -871,9 +871,9 @@ mod tests {
         let saved = os_flp::project::create(&after).unwrap();
         let restored = os_flp::project::load(&saved).unwrap();
         assert_eq!(restored.audio_warps, after.audio_warps);
-        assert_eq!(crate::history::undo(&mut app.state), Some("Vocal Align"));
+        assert_eq!(crate::history::undo(&mut app.state).as_deref(), Some("Vocal Align"));
         assert_eq!(app.state.project, before);
-        assert_eq!(crate::history::redo(&mut app.state), Some("Vocal Align"));
+        assert_eq!(crate::history::redo(&mut app.state).as_deref(), Some("Vocal Align"));
         assert_eq!(app.state.project, after);
         for warp in &after.audio_warps { std::fs::remove_file(&warp.rendered).unwrap(); }
         for file in [guide, dub] { std::fs::remove_file(file).unwrap(); }

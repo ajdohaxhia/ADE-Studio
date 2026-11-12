@@ -25,7 +25,7 @@ pub const CLIP_MODS: &[&str] = &["(disabled)", "(none)", "Alt"];
 
 /// Browser and pickers: shows or hides the browser.
 pub const TOGGLE_BROWSER: Combo = Combo { key: "shortcut_toggle_browser", label: "Toggle browser", choices: F8_KEYS, default: 3 };
-/// Opens or closes the plugin menu (`App::toggle_plugin_menu`).
+/// Opens or closes the plugin palette (`App::toggle_plugin_palette`).
 pub const TOGGLE_PLUGIN_PICKER: Combo =
     Combo { key: "shortcut_toggle_plugin_picker", label: "Toggle plugin picker", choices: F8_KEYS, default: 0 };
 /// Opens or closes the project picker (`App::toggle_project_picker`).
@@ -33,7 +33,7 @@ pub const TOGGLE_PROJECT_PICKER: Combo =
     Combo { key: "shortcut_toggle_project_picker", label: "Toggle project picker", choices: F8_KEYS, default: 2 };
 /// Shows the plugin database: the browser on its Plugin database tab (`App::show_plugin_database`).
 pub const SHOW_PLUGIN_DATABASE: Combo =
-    Combo { key: "shortcut_show_plugin_database", label: "Show plugin database", choices: F8_KEYS, default: 1 };
+    Combo { key: "shortcut_show_plugin_database", label: "Show plugin library", choices: F8_KEYS, default: 1 };
 /// MIDI import window: the modifier held while a MIDI file is chosen or dropped picks the row whose behaviour applies
 /// (`midi_file::show_for`; spec: ui/midi-files.md §10.5).
 pub const MIDI_WHEN_NECESSARY: Combo =
@@ -232,9 +232,9 @@ pub fn clip_double_click(alt: bool) -> Option<ClipOpen> {
 pub fn menu_key(label: &str, shortcut: &'static str) -> &'static str {
     let c = match label {
         "Browser" => &TOGGLE_BROWSER,
-        "Plugin picker" => &TOGGLE_PLUGIN_PICKER,
-        "Project picker" => &TOGGLE_PROJECT_PICKER,
-        "Plugin database" => &SHOW_PLUGIN_DATABASE,
+        "Plugin palette" => &TOGGLE_PLUGIN_PICKER,
+        "Clip palette" => &TOGGLE_PROJECT_PICKER,
+        "Plugin library" => &SHOW_PLUGIN_DATABASE,
         _ => return shortcut,
     };
     if shortcut.ends_with("F8") { prefs::choice(c) } else { shortcut }
@@ -265,7 +265,7 @@ impl App {
     pub(crate) fn f8_key(&mut self, ctrl: bool, alt: bool) {
         match f8(self.shift, ctrl, alt) {
             Some(F8::Browser) => self.act(Action::ToggleWin(Win::Browser)),
-            Some(F8::PluginPicker) => self.toggle_plugin_menu(),
+            Some(F8::PluginPicker) => self.toggle_plugin_palette(),
             Some(F8::PluginDatabase) => self.show_plugin_database(),
             Some(F8::ProjectPicker) => self.toggle_project_picker(),
             None => {}
@@ -321,7 +321,7 @@ mod tests {
             "Toggle browser",
             "Toggle plugin picker",
             "Toggle project picker",
-            "Show plugin database",
+            "Show plugin library",
             "Show when necessary",
             "Show every time",
             "Don't show",
@@ -463,7 +463,7 @@ mod tests {
         app.paint(&mut c, None);
         let f8 = Key::Named(NamedKey::F8);
         let browser = |app: &App| app.state.show_browser;
-        let picker = |app: &App| crate::plugin_menu::is_open(&app.state);
+        let picker = |app: &App| crate::plugin_palette::is_open(&app.state);
         let shown = browser(&app);
         // Defaults: Alt+F8 the browser, F8 the plugin picker.
         app.key(&f8, false, true);
@@ -505,13 +505,13 @@ mod tests {
     /// The menus show the applied keys beside the browser and the pickers.
     #[test]
     fn menus_show_the_applied_keys() {
-        assert_eq!((menu_key("Browser", "Alt+F8"), menu_key("Plugin picker", "F8")), ("Alt+F8", "F8"));
+        assert_eq!((menu_key("Browser", "Alt+F8"), menu_key("Plugin palette", "F8")), ("Alt+F8", "F8"));
         let mut f = Form::applied();
         f.pick(0, 0);
         f.pick(3, 2);
         f.apply();
-        assert_eq!((menu_key("Browser", "Alt+F8"), menu_key("Plugin picker", "F8")), ("F8", "Alt+F8"));
-        assert_eq!((menu_key("Plugin database", "Shift+F8"), menu_key("Project picker", "Ctrl+F8")), ("Ctrl+F8", "Shift+F8"));
+        assert_eq!((menu_key("Browser", "Alt+F8"), menu_key("Plugin palette", "F8")), ("F8", "Alt+F8"));
+        assert_eq!((menu_key("Plugin library", "Shift+F8"), menu_key("Clip palette", "Ctrl+F8")), ("Ctrl+F8", "Shift+F8"));
         assert_eq!(menu_key("Browser", ""), "", "an entry without a key keeps none");
         assert_eq!(menu_key("Mixer", "F9"), "F9");
     }

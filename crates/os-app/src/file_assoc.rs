@@ -17,15 +17,18 @@ use crate::app::App;
 pub const PROG_ID: &str = "LemonStudio.LmnProject";
 /// The extension it registers.
 pub const EXT: &str = ".lmn";
+/// Lemon Studio's own project files (spec: flp/lemon-format.md): no other program has them, so they are simply ours
+/// while the box is ticked.
+pub const LEMON_EXT: &str = ".lemon";
 /// The type's description and the open verb's name (spec).
-const DESCRIPTION: &str = "ML Studio project";
-const FRIENDLY_NAME: &str = "ML Studio";
+const DESCRIPTION: &str = "AQUILA project";
+const FRIENDLY_NAME: &str = "AQUILA";
 /// The per-user classes, where every write goes (`Root::Classes`).
 const CLASSES: &str = r"Software\Classes";
 /// Windows' "Open with ▸ Always" choice for `.lmn` (`Root::User`), value `ProgId`.
 const USER_CHOICE: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.lmn\UserChoice";
 /// The hint bar's text when a `UserChoice` keeps another program after a tick (spec).
-pub const BLOCKED_HINT: &str = "Windows opens .lmn files with another program: choose ML Studio under Open with ▸ Choose another app";
+pub const BLOCKED_HINT: &str = "Windows opens .lmn files with another program: choose AQUILA under Open with ▸ Choose another app";
 
 /// Where a read looks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -109,13 +112,13 @@ pub fn ticked(program: &str, seen: &Seen) -> bool {
     seen.open_command.as_deref().is_some_and(|c| runs(c, program)) && !blocked(program, seen)
 }
 
-/// Whether the per-user `.lmn` default names Lemon Studio's type.
+/// Whether the per-user `.lmn` default names AQUILA's type.
 fn ours(seen: &Seen) -> bool {
     seen.ext_type.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(PROG_ID))
 }
 
 /// The writes of a tick for `program` (spec): the type first, then `.lmn` pointed at it. `Previous` keeps the `.lmn`
-/// default it replaces (removed when there was none); a tick over Lemon Studio's own registration (another copy's, or
+/// default it replaces (removed when there was none); a tick over AQUILA's own registration (another copy's, or
 /// one a `UserChoice` overrides) keeps the `Previous` it has.
 pub fn tick(program: &str, seen: &Seen) -> Vec<Op> {
     let exe = plain(program);
@@ -134,6 +137,8 @@ pub fn tick(program: &str, seen: &Seen) -> Vec<Op> {
         set(format!(r"{PROG_ID}\shell\open\command"), "", format!("\"{exe}\" \"%1\"")),
         set(EXT.into(), "", PROG_ID.into()),
         Op::Set { key: format!(r"{EXT}\OpenWithProgids"), name: PROG_ID, data: String::new() },
+        set(LEMON_EXT.into(), "", PROG_ID.into()),
+        Op::Set { key: format!(r"{LEMON_EXT}\OpenWithProgids"), name: PROG_ID, data: String::new() },
     ]);
     ops
 }
@@ -150,6 +155,8 @@ pub fn untick(seen: &Seen) -> Vec<Op> {
         });
     }
     ops.push(Op::DeleteValue { key: format!(r"{EXT}\OpenWithProgids"), name: PROG_ID });
+    ops.push(Op::DeleteValue { key: LEMON_EXT.into(), name: "" });
+    ops.push(Op::DeleteValue { key: format!(r"{LEMON_EXT}\OpenWithProgids"), name: PROG_ID });
     ops.push(Op::DeleteTree { key: PROG_ID.into() });
     ops
 }
@@ -392,6 +399,8 @@ mod tests {
                 set(r"LemonStudio.LmnProject\shell\open\command", "", &format!("\"{PROGRAM}\" \"%1\"")),
                 set(".lmn", "", PROG_ID),
                 set(r".lmn\OpenWithProgids", PROG_ID, ""),
+                set(".lemon", "", PROG_ID),
+                set(r".lemon\OpenWithProgids", PROG_ID, ""),
             ]
         );
         assert!(reg::apply(&ops));
@@ -403,11 +412,13 @@ mod tests {
             [
                 Op::DeleteValue { key: ".lmn".into(), name: "" },
                 Op::DeleteValue { key: r".lmn\OpenWithProgids".into(), name: PROG_ID },
+                Op::DeleteValue { key: ".lemon".into(), name: "" },
+                Op::DeleteValue { key: r".lemon\OpenWithProgids".into(), name: PROG_ID },
                 Op::DeleteTree { key: PROG_ID.into() },
             ]
         );
         reg::apply(&untick(&s));
-        // What is left: the empty `.lmn` and `OpenWithProgids` keys hold no values.
+        // What is left: the empty `.lmn`, `.lemon` and `OpenWithProgids` keys hold no values (two applies).
         assert_eq!(reg::dump(), (vec![], 2));
         assert!(!ticked(PROGRAM, &seen()));
     }
@@ -452,7 +463,7 @@ mod tests {
         assert_eq!(seen().user_choice, Some((FL_TYPE.into(), Some(format!("\"{OTHER}\" \"%1\"")))));
         assert!(blocked(PROGRAM, &seen()) && !ticked(PROGRAM, &seen()));
         reg::put("HKCU", choice, "ProgId", "lemonstudio.lmnproject");
-        assert!(ticked(PROGRAM, &seen()), "Lemon Studio's own type, any case");
+        assert!(ticked(PROGRAM, &seen()), "AQUILA's own type, any case");
         reg::put("HKCU", choice, "ProgId", r"Applications\lemonstudio.exe");
         reg::put("HKCU", r"Software\Classes\Applications\lemonstudio.exe\shell\open\command", "", &format!("\"{PROGRAM}\" \"%1\""));
         assert!(ticked(PROGRAM, &seen()), "a type that runs this program");

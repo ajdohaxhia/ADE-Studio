@@ -1,4 +1,4 @@
-// ML Studio adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
+// AQUILA adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
 // Gridline â€” "plasma" pack: the editor's frame (see plasma_ui.h): the top bar,
 // the panels, the motion dock, the play bar, the keyboard drawer, and the
 // view of the stage.

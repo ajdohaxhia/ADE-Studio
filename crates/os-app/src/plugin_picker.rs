@@ -40,7 +40,7 @@ fn entries(s:&State,effect:bool)->Vec<&Entry>{
 fn choices(s:&State)->Vec<(bool,usize)>{[true,false].into_iter().flat_map(|fx|entries(s,fx).into_iter().map(move|e|(fx,e.index))).collect()}
 fn panes(s:&State)->Vec<bool>{
     match s.plugin_picker.target {
-        Target::Gen(_)|Target::Replace(_)|Target::Stack(_)=>vec![false],Target::Fx(_)|Target::ClipFx(..)=>vec![true],
+        Target::Gen(_)|Target::Replace(_)|Target::Stack(_)|Target::MemberInst(..)|Target::Track(_)=>vec![false],Target::Fx(_)|Target::ClipFx(..)|Target::Container(_)|Target::Member(..)=>vec![true],
         Target::All=>match s.plugin_picker.filter{1=>vec![false],2=>vec![true],_=>vec![true,false]},
     }
 }
@@ -341,7 +341,7 @@ pub fn paint(ui:&mut Ui,s:&State){
     let lemon=Color::rgb(0x2096f3);
     ui.c.fill_rect_gradient(r,Color::rgb(0x202124),Color::rgb(0x111215),14.);
     ui.c.stroke_rrect(r,14.,1.,Color::rgb(0x46474b));
-    let title=match v.target{Target::Gen(_)|Target::Replace(_)|Target::Stack(_)=>"Choose an instrument",Target::Fx(_)|Target::ClipFx(..)=>"Choose an effect",Target::All=>"Choose a plugin"};
+    let title=match v.target{Target::Gen(_)|Target::Replace(_)|Target::Stack(_)|Target::MemberInst(..)|Target::Track(_)=>"Choose an instrument",Target::Fx(_)|Target::ClipFx(..)|Target::Container(_)|Target::Member(..)=>"Choose an effect",Target::All=>"Choose a plugin"};
     let progress=crate::plugin_previews::progress();
     let btn=|ui:&mut Ui,b:Rect,label:&'static str,hit:Hit,on:bool|{
         let hover=ui.hit(b,Action::PluginPicker(hit),label);
@@ -351,7 +351,7 @@ pub fn paint(ui:&mut Ui,s:&State){
     };
     ui.c.fill_circle(r.x+32.,r.y+29.,13.,lemon);
     for i in 0..6 {let a=i as f32*std::f32::consts::TAU/6.;ui.c.line(r.x+32.,r.y+29.,r.x+32.+11.*a.cos(),r.y+29.+11.*a.sin(),1.,Color::rgb(0x212222));}
-    ui.c.text_clip(Font::light(19,0).bold(),r.x+55.,r.y+17.,145.,ui.t.text,"ML Studio");
+    ui.c.text_clip(Font::light(19,0).bold(),r.x+55.,r.y+17.,145.,ui.t.text,"AQUILA");
     ui.c.text_clip(Font::light(15,0),r.x+203.,r.y+20.,r.w-260.,ui.t.text_dim,title);
     btn(ui,Rect::new(r.right()-81.,r.y+12.,30.,28.),"−",Hit::Minimize,false);
     btn(ui,Rect::new(r.right()-46.,r.y+12.,30.,28.),"×",Hit::Close,false);
@@ -420,7 +420,7 @@ pub fn paint(ui:&mut Ui,s:&State){
             if let Some(p)=v.images.get(&e.uid){crate::plugin_artwork::draw(ui,pic,p);}else{fallback(ui,pic,fx);}
             let x=inspector.x+134.;let w=(inspector.w-390.).max(80.);
             ui.c.text_clip(Font::light(15,0).natural().bold(),x,inspector.y+8.,w,ui.t.text,&e.label);
-            ui.c.text_clip(Font::new(11),x,inspector.y+29.,w,ui.t.text_dim,&format!("Category: {}   |   Developer: {}",e.category,if e.builtin && e.vendor == crate::plugin_db::BUILTIN_VENDOR { "ML Studio" } else { &e.vendor }));
+            ui.c.text_clip(Font::new(11),x,inspector.y+29.,w,ui.t.text_dim,&format!("Category: {}   |   Developer: {}",e.category,if e.builtin && e.vendor == crate::plugin_db::BUILTIN_VENDOR { "AQUILA" } else { &e.vendor }));
             ui.c.text_clip(Font::new(10),x,inspector.y+47.,w,ui.t.text_dim,if v.filter==5{"Hidden from picker - select and Restore below"}else if progress.summary.is_empty(){"Ctrl/Cmd-click: toggle - Shift-click: range"}else{&progress.summary});
             if v.filter!=5{btn(ui,Rect::new(inspector.right()-186.,inspector.y+17.,100.,32.),"Choose",Hit::Choose,true);}
     }

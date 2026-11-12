@@ -57,9 +57,9 @@ pub fn stamp(t: NaiveDateTime) -> String {
     format!("{}-{}-{} at {}h{:02}", t.month(), t.day(), t.year(), t.hour(), t.minute())
 }
 
-/// A backup's file name: `<name> (<what> on <stamp>).lmn`; `what` is "autosaved" or "overwritten".
+/// A backup's file name: `<name> (<what> on <stamp>).lmn`; `what` is "autosaved" or "overwritten" (FL's names).
 pub fn file_name(name: &str, what: &str, t: NaiveDateTime) -> String {
-    format!("{name} ({what} on {}).lmn", stamp(t))
+    format!("{name} ({what} on {}).{}", stamp(t), crate::project_files::EXT)
 }
 
 /// The name backups give the project: its file's, or `untitled` for a project never saved.
@@ -75,8 +75,9 @@ fn autosaved_at(file: &str, name: &str) -> Option<(u32, u32, u32, u32, u32)> {
 /// When backup `file` of `name` was written, if it is one of kind `what` ("autosaved" or "overwritten"): (year,
 /// month, day, hour, minute).
 pub(crate) fn saved_at(file: &str, name: &str, what: &str) -> Option<(u32, u32, u32, u32, u32)> {
-    let file = file.strip_suffix(".flp").map(|s|format!("{s}.lmn")).unwrap_or_else(||file.to_string());
-    let rest = file.strip_prefix(name)?.strip_prefix(" (")?.strip_prefix(what)?.strip_prefix(" on ")?.strip_suffix(").lmn")?;
+    // Older backups are FLPs (or upstream Lemon Studio's .lemon files).
+    let rest = file.strip_prefix(name)?.strip_prefix(" (")?.strip_prefix(what)?.strip_prefix(" on ")?;
+    let rest = rest.strip_suffix(").lmn").or_else(|| rest.strip_suffix(").lemon")).or_else(|| rest.strip_suffix(").flp"))?;
     let (date, time) = rest.split_once(" at ")?;
     let mut d = date.split('-').map(str::parse::<u32>);
     let (Some(Ok(m)), Some(Ok(day)), Some(Ok(y)), None) = (d.next(), d.next(), d.next(), d.next()) else { return None };
@@ -201,7 +202,8 @@ mod tests {
         assert_eq!(project_name(None), "untitled");
         assert_eq!(project_name(Some(Path::new("/music/My song.lmn"))), "My song");
         assert_eq!(autosaved_at("gs7 (autosaved on 10-15-2026 at 0h13).lmn", "gs7"), Some((2026, 10, 15, 0, 13)));
-        assert_eq!(autosaved_at("gs7 (autosaved on 10-15-2026 at 0h13).flp", "gs7"), Some((2026, 10, 15, 0, 13)));
+        assert_eq!(autosaved_at("gs7 (autosaved on 10-15-2026 at 0h13).lemon", "gs7"), Some((2026, 10, 15, 0, 13)));
+        assert_eq!(autosaved_at("gs7 (autosaved on 10-15-2026 at 0h13).flp", "gs7"), Some((2026, 10, 15, 0, 13)), "an older backup");
         for other in ["gs7 (overwritten on 10-15-2026 at 0h13).lmn", "gs70 (autosaved on 10-15-2026 at 0h13).lmn", "gs7.lmn"] {
             assert_eq!(autosaved_at(other, "gs7"), None, "{other}");
         }

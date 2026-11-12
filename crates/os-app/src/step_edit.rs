@@ -288,7 +288,7 @@ mod tests {
 
     /// Keys held together give one chord, written on the release of the last one with every key pressed since the
     /// first (a MIDI note joins in, with its own velocity): one write, one step on, one undo step "Step edit", and one
-    /// undo (Ctrl+Z) removes the whole chord (spec "Entering notes", "Lemon Studio").
+    /// undo (Ctrl+Z) removes the whole chord (spec "Entering notes", "AQUILA").
     #[test]
     fn a_chord_is_one_write_on_the_last_release_and_one_undo() {
         let mut app = app();
@@ -332,7 +332,7 @@ mod tests {
     }
 
     /// Nothing is written while the switch is off or the transport plays (Lemon Studio's choice), nor when playback
-    /// starts or the switch goes off while keys are held; the notes still sound (spec "Lemon Studio").
+    /// starts or the switch goes off while keys are held; the notes still sound (spec "AQUILA").
     #[test]
     fn nothing_while_off_or_playing() {
         let mut app = app();

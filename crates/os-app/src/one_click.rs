@@ -5,7 +5,7 @@
 //! One-click audio recording (spec: ui/one-click-recording.md §2): the toolbar's microphone (and TOOLS > One-click
 //! audio recording) picks an input, plays the song with Record armed and turns what came in into a new audio clip
 //! channel and its clip in the playlist where playback started, or (Into the audio editor) into Tesla on the master
-//! track (spec: plugins/tesla/README.md "Recording into Tesla from Lemon Studio").
+//! track (spec: plugins/tesla/README.md "Recording into Tesla from AQUILA").
 
 use std::time::Instant;
 
@@ -154,7 +154,7 @@ impl App {
             source.start_input(input);
             let safe: String = destination.name.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
             let name = capture::file_name(&format!("{}-{}",destination.mixer,safe),chrono::Local::now().naive_local());
-            match Recorder::start_from(dir.join(name),48000,source) {
+            match Recorder::start_from_capture(dir.join(name),48000,source) {
                 Ok(recorder) => extras.push(ExtraTake { source, recorder, input:input.clone(), destination:destination.clone() }),
                 Err(e) => { source.stop(); return Err(e); }
             }
@@ -359,7 +359,8 @@ impl App {
         self.invalidate();
     }
 
-    /// The take's audio clip channel and clip at `start`, on the first track free over it: one undo step.
+    /// The take's audio clip channel and clip at `start`, on the first track free over it, which becomes an audio track
+    /// on the take's mixer track: one undo step.
     fn place_take(&mut self, path: &std::path::Path, frames: u64, rate: u32, start: u32,destination:Option<&crate::mixer_recording::Destination>,loop_span:Option<(u32,u32)>) -> String {
         let s = &mut self.state;
         let p = &s.project;
@@ -372,6 +373,9 @@ impl App {
         let text = path.to_string_lossy();
         match crate::playlist::add_audio_clip_as(s, &text, track, start, RECORDED) {
             Some(i) => {
+                // The take's track becomes an audio track on the take's mixer track, as the original binds the track
+                // it records into to a mixer track (spec: ui/one-click-recording.md §1, ui/playlist.md §6c).
+                crate::track_links::bind_take(s, i);
                 if let Some(d)=destination {
                     let source=crate::playlist::clips(s)[i].source;
                     if let os_model::ClipSource::Channel(ch)=source {
@@ -395,8 +399,8 @@ impl App {
     }
 
     /// The take into Tesla on the master track: its first Tesla if that holds no sample, else a new one (spec:
-    /// plugins/tesla/README.md "Recording into Tesla from Lemon Studio"). The file stays in `Recorded` either way.
-    fn take_to_editor(&mut self, path: &std::path::Path) -> String {
+    /// plugins/tesla/README.md "Recording into Tesla from AQUILA"). The file stays in `Recorded` either way.
+    pub(crate) fn take_to_editor(&mut self, path: &std::path::Path) -> String {
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let sample = match std::fs::read(path).map_err(|e| e.to_string()).and_then(|b| tesla::wav::read(&b)) {
             Ok(s) => s,
@@ -444,7 +448,7 @@ mod tests {
         assert!(v[0].enabled && v[0].cmd == Cmd::OneClickEditor && v[1].head && v[3].head);
         assert!(v.iter().all(|p| p.mark != Mark::Radio(true)), "nothing picked yet");
         capture::set_last_input(&Input { device: "Test ASIO".into(), asio: true, first: 1, stereo: false });
-        let v = submenu(TOOLS_MENU, "One-click audio recording").expect("TOOLS submenu")(&app.state);
+        let v = submenu(TOOLS_MENU, "Quick record").expect("TOOLS submenu")(&app.state);
         assert_eq!(v[5].mark, Mark::Radio(true), "In 2 dotted");
     }
 

@@ -1,4 +1,4 @@
-// ML Studio adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
+// AQUILA adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
 // Gridline — Gridline itself as a plugin (PH-09): one Instance per plugin
 // instance in the host, independent of the plugin format. The CLAP and VST3
 // entry points (ClapEntry.cpp, Vst3Entry.cpp) translate their APIs to this.

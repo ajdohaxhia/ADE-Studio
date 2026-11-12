@@ -1,4 +1,5 @@
 // Copyright (C) 2026 ItsAlphaNeon
+// Copyright (C) 2026 thacer13
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
@@ -50,7 +51,7 @@ pub fn is_audio(channels: &[Channel], c: &Clip) -> bool {
 
 /// The overlap two clips of one track make, `a` the earlier: `a` starts first, `b` starts before `a` ends and ends
 /// after it; the overlap is `a`'s end − `b`'s start, in ticks. A clip lying wholly inside the other, or one that only
-/// touches it, makes none (spec: "Lemon Studio" rules).
+/// touches it, makes none (spec: "AQUILA" rules).
 fn overlap(a: &Clip, b: &Clip) -> Option<u32> {
     (a.track == b.track && a.position < b.position && b.position < a.end() && b.end() > a.end()).then(|| a.end() - b.position)
 }
@@ -251,6 +252,7 @@ mod tests {
 
     fn channel(index: u16, kind: ChannelKind) -> Channel {
         Channel {
+            id: crate::Id::NONE,
             index,
             kind,
             name: None,

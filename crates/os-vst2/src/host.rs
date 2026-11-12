@@ -20,7 +20,7 @@ use crate::abi::{host_op, Effect, TimeInfo, HOST_SUPPORTS};
 /// What the host reports as its VST version.
 const HOST_VERSION: isize = 2400;
 /// The host's vendor and product name.
-const HOST_NAME: &str = "Lemon Studio";
+const HOST_NAME: &str = "AQUILA";
 
 /// What a plugin told the host, and what it reads from it (shared with the instance).
 pub struct Shared {
@@ -100,6 +100,9 @@ thread_local! {
 
 /// Sets `cell` to `v` for the length of `f`.
 fn with_set<T: Copy + 'static, R>(cell: &'static std::thread::LocalKey<Cell<T>>, v: T, f: impl FnOnce() -> R) -> R {
+    // A crash contained by the unix guard jumps over `Restore`: the cells are put back to rest then.
+    static RESET: std::sync::Once = std::sync::Once::new();
+    RESET.call_once(|| os_host::guard::after_crash(reset));
     struct Restore<T: Copy + 'static>(&'static std::thread::LocalKey<Cell<T>>, T);
     impl<T: Copy + 'static> Drop for Restore<T> {
         fn drop(&mut self) {
@@ -108,6 +111,12 @@ fn with_set<T: Copy + 'static, R>(cell: &'static std::thread::LocalKey<Cell<T>>,
     }
     let _restore = Restore(cell, cell.with(|c| c.replace(v)));
     f()
+}
+
+/// This thread's cells back at rest (no instance being created, no host edit), after a contained crash.
+fn reset() {
+    CREATING.set(std::ptr::null());
+    HOST_EDIT.set(false);
 }
 
 /// Runs `f` (the host setting a parameter or a state) so that the plugin's echo of it is not reported as an edit.

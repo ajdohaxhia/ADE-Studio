@@ -1,4 +1,5 @@
 // Copyright (C) 2026 ItsAlphaNeon
+// Copyright (C) 2026 thacer13
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
@@ -39,7 +40,8 @@ fn sampler_state(wav: &Path, params: &str) -> Vec<u8> {
 }
 
 fn tone(name: &str, frames: usize) -> PathBuf {
-    let wav = std::env::temp_dir().join(name);
+    // One file per process: test runs side by side must not write each other's.
+    let wav = std::env::temp_dir().join(format!("{}-{name}", std::process::id()));
     let t: Vec<f32> = (0..frames).flat_map(|i| { let v = (i as f32 * 0.05).sin() * 0.5; [v, v] }).collect();
     os_engine::wav::write_f32_stereo(&mut std::fs::File::create(&wav).unwrap(), 48000, &t).unwrap();
     wav
@@ -322,6 +324,7 @@ fn engine_plays_a_pattern() {
         assert!(p.activate(48000));
     }
     let ch = os_model::Channel {
+        id: os_model::Id::NONE,
         index: 0, kind: os_model::ChannelKind::Plugin, name: None, plugin: Some("Lemon Sampler".into()), plugin_state: None, color: None,
         enabled: true, volume: 0.78125, pan: 0.0, pitch_cents: 0, mixer_track: 0, sample_path: None,
         layer_children: vec![], envelopes: Default::default(), rack: Default::default(), misc: Default::default(), sound: Default::default(),
@@ -346,7 +349,7 @@ fn engine_plays_a_pattern() {
 fn mono_portamento_glides_through_the_tuning_expression() {
     let Some((_m, shared)) = sampler() else { return };
     // 4 s of a 441 Hz sine at 48 kHz.
-    let wav = std::env::temp_dir().join("os-vst3-porta.wav");
+    let wav = std::env::temp_dir().join(format!("os-vst3-porta-{}.wav", std::process::id()));
     let sine: Vec<f32> = (0..48000 * 4).flat_map(|i| { let v = (i as f32 / 48000.0 * 441.0 * std::f32::consts::TAU).sin() * 0.5; [v, v] }).collect();
     os_engine::wav::write_f32_stereo(&mut std::fs::File::create(&wav).unwrap(), 48000, &sine).unwrap();
     {
@@ -356,6 +359,7 @@ fn mono_portamento_glides_through_the_tuning_expression() {
     }
     let misc = os_model::ChannelMisc { mono: true, porta: true, slide: 1.0, ..Default::default() };
     let ch = os_model::Channel {
+        id: os_model::Id::NONE,
         index: 0, kind: os_model::ChannelKind::Plugin, name: None, plugin: Some("Lemon Sampler".into()), plugin_state: None, color: None,
         enabled: true, volume: 0.78125, pan: 0.0, pitch_cents: 0, mixer_track: 0, sample_path: None,
         layer_children: vec![], envelopes: Default::default(), rack: Default::default(), misc, sound: Default::default(),
@@ -1333,8 +1337,8 @@ fn installed_instrument_releases_notes_without_editor() {
 
 #[test]
 fn released_notes_keep_their_matching_ids() {
-    let mut ids=NoteIds{ids:[-1;128],next:0,active:Vec::with_capacity(128)};
-    let note=|kind,key|Note{time:17,kind,key,velocity:0.8};
+    let mut ids=NoteIds{ids:[-1;128],next:0,active:Vec::with_capacity(128),chs:[0;128]};
+    let note=|kind,key|Note{time:17,kind,key,ch:0,velocity:0.8};
     let a=ids.event(note(NoteKind::On,60)).unwrap();
     let b=ids.event(note(NoteKind::On,60)).unwrap();
     let c=ids.event(note(NoteKind::On,64)).unwrap();
@@ -1385,4 +1389,40 @@ fn mpe_installed_instrument_pitch_and_release() {
         p.midi(0,[0x81,60,64]);let mut tail=0.0f32;for block in 0..300{p.process(48000,&mut l,&mut r);if block>250{tail=tail.max(peak(&l)).max(peak(&r));}}assert!(tail<0.0001,"released peak {tail}");
     }
     eprintln!("MPE baseline/bent crossing rates: {rates:?}");assert!((rates[1]/rates[0]-2.).abs()<0.08,"independent note pitch must rise one octave");
+}
+
+/// MIDI channel through (spec: ui/channel-rack.md §18): a note on goes on its MIDI channel, and its key's note off on
+/// the same one.
+#[test]
+fn notes_go_on_their_midi_channel() {
+    let mut ids = NoteIds { ids: [-1; 128], next: 0, active: Vec::new(), chs: [0; 128] };
+    let on = ids.event(Note { time: 0, kind: NoteKind::On, key: 60, velocity: 1.0, ch: 3 }).expect("on");
+    let off = ids.event(Note { time: 0, kind: NoteKind::Off, key: 60, velocity: 0.0, ch: 0 }).expect("off");
+    let plain = ids.event(Note { time: 0, kind: NoteKind::On, key: 62, velocity: 1.0, ch: 0 }).expect("on");
+    unsafe {
+        assert_eq!((on.event.note_on.channel, off.event.note_off.channel, plain.event.note_on.channel), (3, 3, 0));
+    }
+}
+
+/// The notes among a processor's output events: ons, offs and a note on of velocity 0 as an off; other events are
+/// passed over (Burn MIDI to, spec: ui/channel-rack.md §18).
+#[test]
+fn notes_among_output_events() {
+    let on = |at: i32, pitch: i16, velocity: f32| Event {
+        bus_index: 0,
+        sample_offset: at,
+        ppq_position: 0.0,
+        flags: 0,
+        type_: NOTE_ON_EVENT,
+        event: EventData { note_on: NoteOnEvent { channel: 3, pitch, tuning: 0.0, velocity, length: 0, note_id: -1 } },
+    };
+    let off = Event { type_: NOTE_OFF_EVENT, event: EventData { note_off: NoteOffEvent { channel: 3, pitch: 60, velocity: 0.0, note_id: -1, tuning: 0.0 } }, ..on(9, 0, 0.0) };
+    let other = Event { type_: 4, ..on(5, 61, 1.0) };
+    let list = EventList::create();
+    for e in [on(2, 60, 0.5), other, on(6, 64, 0.0), off] {
+        list.get().push(e);
+    }
+    let got: Vec<_> = notes_of(&list.get().take()).map(|n| (n.offset, n.key, n.channel, n.on, n.velocity)).collect();
+    assert_eq!(got, [(2, 60, 3, true, 0.5), (6, 64, 3, false, 0.0), (9, 60, 3, false, 0.0)]);
+    assert!(list.get().take().is_empty());
 }

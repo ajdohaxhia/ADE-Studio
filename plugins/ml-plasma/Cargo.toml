@@ -1,6 +1,6 @@
 [package]
 name = "ml-plasma"
-description = "ML Studio's bundled Gridline Plasma adaptation"
+description = "AQUILA's bundled Gridline Plasma adaptation"
 version.workspace = true
 edition.workspace = true
 license = "GPL-3.0-only"

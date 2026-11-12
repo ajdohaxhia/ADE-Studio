@@ -1,4 +1,5 @@
 // Copyright (C) 2026 ItsAlphaNeon
+// Copyright (C) 2026 thacer13
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
@@ -82,6 +83,8 @@ pub enum Then {
     ImportEffectChain,
     ExportEffectChain(usize),
     DeleteEffectChain(usize),
+    /// VIEW ▸ Background ▸ Set image wallpaper... (`App::set_wallpaper`).
+    Wallpaper,
     /// The Arpeggiate dialog's folder button (spec: ui/piano-arpeggiate.md §1).
     ArpPattern,
     /// The Quantize dialog's folder button (spec: ui/piano-quantize.md §1).
@@ -100,6 +103,8 @@ pub enum Then {
     ExportZip,
     /// Save preset as... for the plugin with this key (`plugins::Plugins::hosted`).
     SavePreset(usize),
+    /// Save channel state as... for this rack row (`crate::channel_states`).
+    SaveChannelState(usize),
     /// Import preset... for the plugin with this key.
     ImportPreset(usize),
     /// Rename preset... for the plugin with this key: its current preset file.
@@ -129,6 +134,10 @@ pub enum Then {
     SongSignature(crate::timesig::SongSig, u8, u8),
     /// The project's data folder: its questions and folder pickers (`crate::data_folder`).
     DataFolder(crate::data_folder::DThen),
+    /// A control-plane client's proposal: Yes applies it, No discards it (`crate::control::propose`).
+    Proposal(u64),
+    /// A control-plane client asks to save the project to this file: Yes saves it.
+    ClientSave(PathBuf),
     /// The MIDI file to import (`crate::midi_file`); true: from the piano roll.
     MidiImport(bool),
     /// Where to export a MIDI file; true: the piano roll's channel.
@@ -141,6 +150,17 @@ pub enum Then {
     NewProjectFolder,
     /// The Delete unused files question: Yes deletes these files, then saves the project.
     DeleteUnused(Vec<PathBuf>),
+    /// The External input question for this mixer track: Yes switches it to External input only (spec:
+    /// audio/track-io.md §1.4).
+    ExtInput(u16),
+    /// Prepare for performance mode's question: Ok opens Marker settings (spec: ui/performance-mode.md §1).
+    PerfConfirm,
+    /// Set up for MIDI export's question: Ok turns the channels into MIDI Out channels (spec: plugins/midi-out.md §6.6).
+    MidiExportConfirm,
+    /// Marker settings: Accept (Ok) prepares with this count and spacing.
+    PerfMarkers(u8, u8),
+    /// The update offered (`crate::update`): Install (Yes), Skip this version (No) or Later (Cancel).
+    Update(crate::update::Found),
 }
 
 /// What waits for the save-changes question.
@@ -244,6 +264,8 @@ pub enum Body {
     TimeSig(crate::timesig::SigForm),
     /// Rename project, Save as and New project (`crate::project_forms`).
     Project(crate::project_forms::Form),
+    /// Prepare for performance mode's Marker settings (`crate::perform`).
+    Markers(crate::perform::MarkerForm),
 }
 
 /// A dialog on the stack (`State::dialogs`, bottom to top; only the top one takes input).
@@ -319,6 +341,8 @@ pub enum DHit {
     Apply,
     /// Time signature dialog: the denominator's value box (true) or the numerator's; Accept is `Accept`.
     SigValue(bool),
+    /// Marker settings: the Spacing box (true) or the Marker count box.
+    MarkerValue(bool),
     /// Rename project, Save as and New project: their parts (`crate::project_forms`).
     Form(crate::project_forms::FHit),
 }
@@ -519,8 +543,12 @@ impl App {
             Body::VocalAlign(_) => { crate::vocal_align::closed(self); return; }
             Body::Collaboration(_) | Body::NoteProperties(_) | Body::Normalize(_) | Body::StripSilence(_) | Body::ClipFx(..)=>{self.drag=None;return;},
             Body::Msg(m) => {
+                // The External input question remembers either answer (`prefs::EXTERNAL_INPUT`, Settings ▸ Recording).
+                if let (Then::ExtInput(_), Some((_, true)), Reply::Button(a @ (Answer::Yes | Answer::No))) = (&m.then, m.remember, &reply) {
+                    crate::prefs::set_choice(&crate::prefs::EXTERNAL_INPUT, if *a == Answer::Yes { 1 } else { 2 });
+                }
                 // Ok with Remember my choice ticked turns the message off; Cancel never does.
-                if let Some((entry, true)) = m.remember {
+                else if let Some((entry, true)) = m.remember {
                     if matches!(reply, Reply::Button(Answer::Ok | Answer::Yes)) {
                         crate::messages::set(entry, false);
                     }
@@ -551,6 +579,10 @@ impl App {
                     None => Then::Signature(f.pattern, f.num, f.den),
                 }
             }
+            Body::Markers(f) => {
+                self.state.playlist.popup = None;
+                Then::PerfMarkers(f.count, f.spacing)
+            }
         };
         // The replace question answers the Save dialog under it.
         if let Then::Replace(p) = then {
@@ -568,7 +600,7 @@ impl App {
             Body::Msg(m) => Reply::Button(m.escape()),
             Body::File(_) => Reply::File(None),
             Body::Collaboration(_) | Body::NoteProperties(_) | Body::Normalize(_) | Body::StripSilence(_) | Body::ClipFx(..) | Body::VocalAlign(_) | Body::Shortcuts(_) => Reply::Button(Answer::Cancel),
-            Body::TimeSig(_) => Reply::Button(Answer::Cancel),
+            Body::TimeSig(_) | Body::Markers(_) => Reply::Button(Answer::Cancel),
             Body::Project(_) | Body::Headphones(_) | Body::RoutePicker(_) | Body::MixerInsert(_) | Body::Ai => Reply::Button(Answer::Cancel),
         })
     }
@@ -576,7 +608,7 @@ impl App {
     fn top_file(&mut self) -> Option<&mut FileDlg> {
         match &mut self.state.dialogs.last_mut()?.body {
             Body::File(f) => Some(f),
-            Body::Collaboration(_) | Body::NoteProperties(_) | Body::Normalize(_) | Body::StripSilence(_) | Body::ClipFx(..) | Body::VocalAlign(_) | Body::Msg(_) | Body::Shortcuts(_) | Body::TimeSig(_) | Body::Project(_) | Body::Headphones(_) | Body::RoutePicker(_) | Body::MixerInsert(_) | Body::Ai => None,
+            Body::Collaboration(_) | Body::NoteProperties(_) | Body::Normalize(_) | Body::StripSilence(_) | Body::ClipFx(..) | Body::VocalAlign(_) | Body::Msg(_) | Body::Shortcuts(_) | Body::TimeSig(_) | Body::Markers(_) | Body::Project(_) | Body::Headphones(_) | Body::RoutePicker(_) | Body::MixerInsert(_) | Body::Ai => None,
         }
     }
 
@@ -655,7 +687,7 @@ impl App {
             DHit::Button(i) => {
                 let a = match &m.body {
                     Body::Msg(msg) => msg.buttons.get(i).copied().filter(|a| !(*a==Answer::Ok && matches!(msg.then,Then::StemChoose(_,0)))),
-                    Body::Collaboration(_) | Body::NoteProperties(_) | Body::Normalize(_) | Body::StripSilence(_) | Body::ClipFx(..) | Body::VocalAlign(_) | Body::File(_) | Body::Shortcuts(_) | Body::TimeSig(_) | Body::Project(_) | Body::Headphones(_) | Body::RoutePicker(_) | Body::MixerInsert(_) | Body::Ai => None,
+                    Body::Collaboration(_) | Body::NoteProperties(_) | Body::Normalize(_) | Body::StripSilence(_) | Body::ClipFx(..) | Body::VocalAlign(_) | Body::File(_) | Body::Shortcuts(_) | Body::TimeSig(_) | Body::Markers(_) | Body::Project(_) | Body::Headphones(_) | Body::RoutePicker(_) | Body::MixerInsert(_) | Body::Ai => None,
                 };
                 if let Some(a) = a {
                     self.answer(Reply::Button(a));
@@ -690,7 +722,9 @@ impl App {
             DHit::SigValue(den) => self.sig_list(den),
             DHit::Accept if matches!(&m.body, Body::MixerInsert(form) if form.count().is_some()) =>
                 self.answer(Reply::Button(Answer::Ok)),
-            DHit::Accept if matches!(m.body, Body::TimeSig(_)) => self.answer(Reply::Button(Answer::Ok)),
+            DHit::Accept if matches!(m.body, Body::TimeSig(_) | Body::Markers(_)) => self.answer(Reply::Button(Answer::Ok)),
+            // Prepare for performance mode's Marker settings (spec: ui/performance-mode.md §1).
+            DHit::MarkerValue(spacing) => self.marker_list(spacing),
             // Rename project, Save as and New project: a part that closes the form answers it.
             DHit::Form(h) => {
                 if let Some(reply) = self.form_click(h) {
@@ -849,7 +883,7 @@ impl App {
                 }
             }
             // Esc closes an open value list first, then the dialog (as its ×); Enter presses Accept, its only button.
-            Body::TimeSig(_) => {
+            Body::TimeSig(_) | Body::Markers(_) => {
                 let list = self.state.playlist.popup.is_some();
                 match key {
                     Key::Named(NamedKey::Escape) if list => self.state.playlist.popup = None,
@@ -922,7 +956,7 @@ impl App {
     pub fn top_message(&self) -> Option<(String, String)> {
         match &self.state.dialogs.last()?.body {
             Body::Msg(m) => Some((m.title.clone(), m.plain())),
-            Body::Collaboration(_) | Body::NoteProperties(_) | Body::Normalize(_) | Body::StripSilence(_) | Body::ClipFx(..) | Body::VocalAlign(_) | Body::File(_) | Body::Shortcuts(_) | Body::TimeSig(_) | Body::Project(_) | Body::Headphones(_) | Body::RoutePicker(_) | Body::MixerInsert(_) | Body::Ai => None,
+            Body::Collaboration(_) | Body::NoteProperties(_) | Body::Normalize(_) | Body::StripSilence(_) | Body::ClipFx(..) | Body::VocalAlign(_) | Body::File(_) | Body::Shortcuts(_) | Body::TimeSig(_) | Body::Markers(_) | Body::Project(_) | Body::Headphones(_) | Body::RoutePicker(_) | Body::MixerInsert(_) | Body::Ai => None,
         }
     }
 }

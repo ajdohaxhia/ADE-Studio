@@ -264,10 +264,10 @@ fn insert(app: &mut App, chains: &[Chain], track: u16, requested: Option<u8>) ->
         let state = plugin.save_state().ok_or_else(|| format!("{} could not save its state", stage.name))?;
         drop(plugin);
         let effect = if desc.format == os_host::Format::Native {
-            os_model::SlotPlugin { name: desc.id, state }
+            os_model::SlotPlugin { id: os_model::Id::NONE, name: desc.id, state }
         } else {
             let reference = crate::project_plugins::plugin_ref(&desc, state);
-            os_model::SlotPlugin { name: os_flp::wrapper::WRAPPER.into(), state: os_flp::wrapper::encode(None, &reference) }
+            os_model::SlotPlugin { id: os_model::Id::NONE, name: os_flp::wrapper::WRAPPER.into(), state: os_flp::wrapper::encode(None, &reference) }
         };
         prepared.push((hosted, effect));
     }
@@ -458,7 +458,7 @@ pub fn act(app: &mut App, hit: Hit) {
                 FileDlg::new(Mode::Save, "Export effect chain", "effect chain export", Then::ExportEffectChain(i))
                     .name("Effect Chain.lemonchain")
             };
-            app.file_dialog(dlg.filter("ML Studio effect chain", &["lemonchain"]));
+            app.file_dialog(dlg.filter("AQUILA effect chain", &["lemonchain"]));
         }
         Hit::ChainCancel => { c.draft = None; }
         Hit::ChainSave => {
@@ -720,7 +720,7 @@ mod tests {
         app.paint(&mut canvas, None);
         click(&mut app, Hit::Choose);
         assert_eq!(slot_names(&app, 2), names);
-        assert_eq!(crate::history::undo(&mut app.state), Some("Insert effect chains"));
+        assert_eq!(crate::history::undo(&mut app.state).as_deref(), Some("Insert effect chains"));
 
         // Grabbing either selected card carries the whole batch in the displayed order.
         let card = hit(&app, Action::PluginPicker(Hit::ChainTile(2)));
@@ -777,7 +777,7 @@ mod tests {
                 .filter_map(|(_, effect)| effect.as_ref().and_then(crate::project_plugins::wrapped_slot))
                 .map(|effect| effect.name).collect();
             assert_eq!(names, chain.stages.iter().map(|s| s.name.clone()).collect::<Vec<_>>());
-            assert_eq!(crate::history::undo(&mut app.state), Some("Insert effect chain"));
+            assert_eq!(crate::history::undo(&mut app.state).as_deref(), Some("Insert effect chain"));
             app.mixer_tick();
             assert_eq!(app.state.project.mixer[2].slots.iter().flatten().count(), 1);
         }

@@ -179,11 +179,12 @@ pub trait Library: Send + Sync {
     fn create(self: Arc<Self>, id: &str) -> Result<SharedPlugin, String>;
 }
 
-/// The parameter of a built-in Lemon instrument that takes a note's mod X as per-note modulation (`use_note_levels`;
-/// spec: plugins/lemon-sampler.md, plugins/3x-osc.md parameter names).
-pub const NOTE_MOD_X: &str = "Filter frequency (modulation X)";
+/// The names of the parameters through which the built-in Lemon instruments take a note's mod X as per-note
+/// modulation (`use_note_levels`): Lemon Sampler's and Lemon Trio's filter frequency (spec: plugins/lemon-sampler.md,
+/// plugins/3x-osc.md parameter names), Citrus's Mod X (spec: plugins/citrus.md §2).
+pub const NOTE_MOD_X: [&str; 2] = ["Filter frequency (modulation X)", "Mod A"];
 /// The same for a note's mod Y.
-pub const NOTE_MOD_Y: &str = "Filter bandwidth (modulation Y)";
+pub const NOTE_MOD_Y: [&str; 2] = ["Filter bandwidth (modulation Y)", "Mod B"];
 
 /// ARA editor requests, drained by the main thread after releasing the plugin lock.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -213,6 +214,12 @@ pub trait Plugin: Instrument + HostedEffect + Send {
     /// 2 native per-note expressions. This does not promise patch mappings.
     fn mpe_support(&self)->u8{0}
     fn desc(&self) -> &Descriptor;
+
+    /// The plugin's help page, for its menu's Help (spec: ui/plugin-window.md "Help"): a CLAP plugin's manual URL, else
+    /// its URL; a VST3 plug-in's factory URL. `None`: the plugin names none.
+    fn help_url(&self) -> Option<String> {
+        None
+    }
 
     /// Activates at `rate` (UI thread); reactivates when the rate changes. The audio thread renders silence (an
     /// instrument) or passes the sound through (an effect) until the instance is active at the stream's rate, and asks
@@ -260,9 +267,9 @@ pub trait Plugin: Instrument + HostedEffect + Send {
     }
 
     /// Sends each note's own pan and mod X / Y (`Instrument::note_start`) to the instance: the pan as a per-note
-    /// expression, the mods as per-note modulation of the parameters named [`NOTE_MOD_X`] / [`NOTE_MOD_Y`] where it has
-    /// them (UI thread). For the built-in Lemon plugins only (an OpenStudio choice: other plugins have no agreed way to
-    /// take FL-style note levels). False when the format cannot.
+    /// expression, the mods as per-note modulation of the parameters named in [`NOTE_MOD_X`] / [`NOTE_MOD_Y`] where it
+    /// has them (UI thread). For the built-in Lemon plugins only (an OpenStudio choice: other plugins have no agreed way
+    /// to take FL-style note levels). False when the format cannot.
     fn use_note_levels(&mut self) -> bool {
         false
     }
@@ -273,6 +280,25 @@ pub trait Plugin: Instrument + HostedEffect + Send {
     fn use_voice_gains(&mut self) -> bool {
         false
     }
+
+    /// Sends each audio clip voice's end (`Instrument::voice_start`) as per-note modulation of the parameter named
+    /// `name`; the instance then ends the voice there itself (`Instrument::voice_ends`; UI thread). For Lemon Sampler
+    /// only (spec: audio/audio-clips.md "What a clip plays"). False when the plugin or format cannot.
+    fn use_end_param(&mut self, name: &str) -> bool {
+        let _ = name;
+        false
+    }
+
+    /// Sends the channel's volume and pan (`Instrument::channel_levels`) to the instance, which works them into its
+    /// voices' final levels; the engine then leaves its output as it is (UI thread). For Lemon Sampler only (spec:
+    /// plugins/host-link.md "Channel levels"). False when the format cannot.
+    fn use_channel_levels(&mut self) -> bool {
+        false
+    }
+
+    /// Automation of index `.0` of each pair reaches parameter `.1`: a project file's indexes for the plugin this one
+    /// stands in for (UI thread). Ignored where the format has no such list.
+    fn use_param_aliases(&mut self, _aliases: &'static [(u32, u32)]) {}
 
     /// Tells the instance whether it renders offline (an export: no deadline, the plugin's best quality) or for live
     /// playback (UI thread, with no stream processing the instance). Formats without such a switch ignore it.
@@ -345,6 +371,33 @@ pub trait Plugin: Instrument + HostedEffect + Send {
     fn attention(&self) -> Option<Arc<Attention>> {
         None
     }
+
+    /// Keeps the notes the plugin puts out (a CLAP note output port, VST 3 output events) from now on, for
+    /// [`Plugin::take_notes_out`]; off drops them again. The channel menu's Burn MIDI to records them (spec:
+    /// ui/channel-rack.md §18). Default: a plugin that puts out no notes.
+    fn capture_notes(&mut self, on: bool) {
+        let _ = on;
+    }
+    /// Whether it can put out notes at all: it declares a CLAP note output port or a VST 3 event output bus. Burn MIDI
+    /// to plays only those through a pass. Default: none.
+    fn puts_out_notes(&self) -> bool {
+        false
+    }
+    /// The notes put out during the `process` calls since the last call, oldest first, while capturing.
+    fn take_notes_out(&mut self) -> Vec<NoteOut> {
+        Vec::new()
+    }
+}
+
+/// A note a plugin put out: a note on (velocity 0..1; a MIDI note on of velocity 0 is a note off) or off, on `key`
+/// and MIDI `channel` (0..15), `offset` frames into the `process` call it came in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NoteOut {
+    pub offset: u32,
+    pub key: u8,
+    pub channel: u8,
+    pub velocity: f32,
+    pub on: bool,
 }
 
 pub type SharedPlugin = Arc<Mutex<dyn Plugin>>;

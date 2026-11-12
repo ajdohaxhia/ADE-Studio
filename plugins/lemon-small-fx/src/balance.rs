@@ -21,11 +21,12 @@ pub const SETTINGS: [Setting; dsp::PARAMS] = [
 ];
 
 /// Editor layout (spec §2), as the original's: the balance knob, the levels between, the volume knob; the value texts
-/// under the knobs.
+/// under the knobs. The page's ranges end before their last number (6 px apart, 8 px from the edges); a card's `x1` and
+/// `y1` are its last pixels.
 const CARDS: [Card; 3] = [
-    Card { x0: 8.0, x1: 100.0, y0: 28.0, y1: 124.0, heading: "BALANCE" },
-    Card { x0: 106.0, x1: 182.0, y0: 28.0, y1: 124.0, heading: "OUTPUT" },
-    Card { x0: 188.0, x1: 280.0, y0: 28.0, y1: 124.0, heading: "VOLUME" },
+    Card { x0: 8.0, x1: 99.0, y0: 28.0, y1: 123.0, heading: "BALANCE" },
+    Card { x0: 106.0, x1: 181.0, y0: 28.0, y1: 123.0, heading: "OUTPUT" },
+    Card { x0: 188.0, x1: 279.0, y0: 28.0, y1: 123.0, heading: "VOLUME" },
 ];
 
 const CONTROLS: [Control; 2] = [
@@ -36,12 +37,14 @@ const CONTROLS: [Control; 2] = [
 pub const SPEC: &Spec = &Spec {
     name: "ML Balance",
     word: "BALANCE",
-    about: "ML Studio's balance",
+    about: "AQUILA's balance",
     settings: &SETTINGS,
     version: None,
     any_version: false,
     fields: &[],
     tail: &[],
+    blank: None,
+    locate: None,
     size: (288, 162),
     cards: &CARDS,
     controls: &CONTROLS,
@@ -127,7 +130,7 @@ pub struct BalanceKind;
 impl Kind for BalanceKind {
     const SPEC: &'static Spec = SPEC;
     const CLAP_ID: &'static str = "org.openstudio.lemon-balance";
-    const CLAP_DESCRIPTION: &'static str = "ML Studio's balance";
+    const CLAP_DESCRIPTION: &'static str = "AQUILA's balance";
     const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::AudioEffect, ClapFeature::Utility, ClapFeature::Mixing, ClapFeature::Stereo];
     const VST3_CLASS_ID: [u8; 16] = *b"LemonStudioBalnc";
     const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] = &[Vst3SubCategory::Fx, Vst3SubCategory::Spatial];

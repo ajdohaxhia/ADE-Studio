@@ -4,20 +4,20 @@
   "sections": [
     {
       "date": "2026-11-11",
-      "title": "ML Studio Channel Rack editing and Playlist timing fixes \u00b7 public build 2026111102",
+      "title": "AQUILA Channel Rack editing and Playlist timing fixes \u00b7 public build 2026111102",
       "changes": [
         "Drag across Channel Rack rows to select channels. The selection box and row highlights show the selection as you drag. Press Delete to remove the selected channels together.",
         "Use Mute or Solo on a selected Channel Rack row to apply it to the group. Adjust Pitch, Volume, or Pan together while keeping the relative settings between channels.",
         "Hold Ctrl and drag to reorder a Channel Rack row or move the selected channels together. An insertion line shows where the rows will land. Undo and Redo preserve the notes and instruments attached to each channel.",
         "Fixed the Playlist audio timing editor closing or placing an extra clip when you clicked or dragged inside the editor.",
-        "Fixed distorted PAT and SONG labels and sharpened the Play, Pause, and Stop icons. Updated the ML Studio app icon for Windows, macOS, and Linux."
+        "Fixed distorted PAT and SONG labels and sharpened the Play, Pause, and Stop icons. Updated the AQUILA app icon for Windows, macOS, and Linux."
       ]
     },
     {
       "date": "2026-11-11",
-      "title": "ML Studio workspace refresh and Playlist editing \u00b7 public build 2026111101",
+      "title": "AQUILA workspace refresh and Playlist editing \u00b7 public build 2026111101",
       "changes": [
-        "ML Studio has a refreshed toolbar and Channel Rack with compact channel controls, a pitch knob on each row and an inline graph editor. Studio and Console are the new names for the built-in workspace styles.",
+        "AQUILA has a refreshed toolbar and Channel Rack with compact channel controls, a pitch knob on each row and an inline graph editor. Studio and Console are the new names for the built-in workspace styles.",
         "Preview Playlist Clip Picker patterns through the loaded instrument while playback is stopped. Audio and pattern previews play once by default. Turn Loop on to repeat, click the stop button to stop a preview, and drag the picker edge to resize it.",
         "Make It Fit stretches selected audio clips to one bar each while keeping their original positions and trim windows.",
         "Click a sliced audio clip with Draw or Paint to use that exact segment for the next placement. Audio placements can also have their own names and colors.",
@@ -333,9 +333,9 @@
     },
     {
       "date": "2026-11-04",
-      "title": "Michael Lane Edition startup artwork \u00b7 public build 2026110404",
+      "title": "AQUILA startup artwork \u00b7 public build 2026110404",
       "changes": [
-        "The startup logo now carries Michael Lane Edition in gold lettering along the outer groove of the animated record. The loading status stays below the artwork."
+        "The startup logo now carries AQUILA in gold lettering along the outer groove of the animated record. The loading status stays below the artwork."
       ]
     },
     {
@@ -438,7 +438,7 @@
         "Improved unsaved-change and autosave tracking for reported hosted-plugin edits, and stop saving when a hosted plugin cannot supply its state.",
         "Project and backup saves now use temporary-file replacement and report backup failures. Cleanup protects original warp sources, and ZIP imports use independent extraction folders rather than reusing stale equal-size files.",
         "Recording overflow now preserves elapsed time with silence for missing frames instead of shifting subsequent audio earlier. Lost-input warnings remain; missing audio cannot be recovered.",
-        "Redesigned the download page with Michael Lane Edition directly below Lemon Studio, a detailed feature overview, the updated Wave section and the full searchable Change Log. Complete DAW builds and matching source are published on the website and GitHub.",
+        "Redesigned the download page with AQUILA directly below Lemon Studio, a detailed feature overview, the updated Wave section and the full searchable Change Log. Complete DAW builds and matching source are published on the website and GitHub.",
         "Includes Windows, Linux x64, Apple-silicon Mac and Intel Mac packages. Mac is ad-hoc signed, not notarized; Intel checks use Rosetta and Linux runtime/audio testing remains unperformed. Existing ARA and third-party compatibility limitations remain."
       ]
     },
@@ -455,13 +455,13 @@
         "Added optional Browser Single Folder View, preview-only Normalize/Reverse, and a hidden-by-default Parameters browser tab enabled through Browser settings.",
         "Added named marker profiles with save/merge/replace and subdued marker colors.",
         "Slowed tempo dragging and added decimal BPM entry with undo. Fixed narrow-toolbar overflow access. Sampler tempo estimation is now labelled as a length-based estimate, not a rhythm detector.",
-        "Includes the integrated Master Assistant, Lemon Chop and prior mixer/workflow improvements. Complete source and DAW downloads are also published to the Michael Lane Edition GitHub repository.",
+        "Includes the integrated Master Assistant, Lemon Chop and prior mixer/workflow improvements. Complete source and DAW downloads are also published to the AQUILA GitHub repository.",
         "Added a separate Intel Mac package alongside Apple-silicon Mac, Windows and Linux x64. Mac builds are ad-hoc signed, not notarized. Intel compatibility is checked under Rosetta, not on physical Intel hardware; Linux audio/runtime testing remains unperformed. ARA compatibility limitations remain."
       ]
     },
     {
       "date": "2026-11-02",
-      "title": "Master Assistant and Michael Lane Edition \u00b7 public build 2026110204",
+      "title": "Master Assistant and AQUILA \u00b7 public build 2026110204",
       "changes": [
         "Published the integrated Lemon Master Assistant: mastering EQ, dynamic EQ, multiband compression, stereo imaging and maximizer, with dedicated master controls and settings saved in projects. The native engine is included in installations and automatic updates.",
         "Added the channel-strip mixer view, hosting original Waves plugin interfaces above analog-style faders, with improved fitting, section-aligned paging and Abbey Road TG12345 paging. Waves is the currently tested focus; third-party plugins are not included.",
@@ -470,7 +470,7 @@
         "Added manual audio warp markers with project persistence, undo and rendering while preserving the source and pitch.",
         "Improved Parametric EQ 2 HQ mode and parameter smoothing; preserved rejected imported plugin state for recovery without claiming universal FLP plugin-setting compatibility.",
         "Added the Lemon Wave wavetable instrument foundation and factory presets.",
-        "Identified this edition consistently as Michael Lane Edition and linked its public source fork while preserving original Lemon Studio and dependency credits.",
+        "Identified this edition consistently as AQUILA and linked its public source fork while preserving original Lemon Studio and dependency credits.",
         "Added the shared website and in-app Change Log and improved narrow community-tab labels.",
         "Known issues remain: Auto-Tune ARA compatibility and Melodyne transport behavior. Linux packages are compiled; Linux audio/runtime testing has not been performed."
       ]

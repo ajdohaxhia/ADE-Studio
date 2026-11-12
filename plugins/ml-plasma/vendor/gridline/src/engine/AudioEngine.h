@@ -1,4 +1,4 @@
-// ML Studio adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
+// AQUILA adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
 // Gridline — realtime engine (EN-03/EN-04): transport, sample-accurate event
 // dispatch, generators, mixer graph, metering. process() runs on the audio
 // thread; everything else is called from the UI thread. The same code renders

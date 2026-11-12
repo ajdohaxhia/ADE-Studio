@@ -56,7 +56,7 @@ pub fn ensure(app:&mut App,t:u16)->Option<u8> {
     if let Err(e)=app.plugins.create_effect(t,SLOT,index,Some(&params::plugin_state_from_fl(&state))) {
         app.state.message=Some(format!("EQ: {e}"));return None;
     }
-    mixer::track_mut(&mut app.state,t)?.slots[SLOT as usize]=Some(os_model::SlotPlugin{name:EQ_FILE_NAME.into(),state});
+    mixer::track_mut(&mut app.state,t)?.slots[SLOT as usize]=Some(os_model::SlotPlugin { id: os_model::Id::NONE, name:EQ_FILE_NAME.into(),state});
     app.plugins.added(key);
     app.transport.set_effects(app.plugins.effects());
     app.state.piano.dirty=true;

@@ -112,7 +112,7 @@ impl Shared {
             return;
         }
         let Some(f) = SEPARATOR.get().copied() else {
-            self.message("Stem separation is available inside ML Studio");
+            self.message("Stem separation is available inside AQUILA");
             self.busy.store(false, Ordering::Release);
             return;
         };
@@ -405,7 +405,7 @@ impl LemonChop {
 }
 impl Plugin for LemonChop {
     const NAME: &'static str = "ML Chop";
-    const VENDOR: &'static str = "ML Studio";
+    const VENDOR: &'static str = "AQUILA";
     const URL: &'static str = "";
     const EMAIL: &'static str = "";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");

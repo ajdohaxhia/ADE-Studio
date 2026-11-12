@@ -1,4 +1,4 @@
-// ML Studio adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
+// AQUILA adaptation; modified 11 November 2026. See the ML Plasma adapter README.md and UPSTREAM.json.
 // Gridline — CLAP entry point of Gridline as a plugin (PH-09), written
 // against the CLAP interface headers (MIT). Two plugins:
 //   org.gridline.gridline      "Gridline"     instrument: notes in, stereo out
@@ -74,7 +74,7 @@ const SuiteDescs& suiteDescs() {
       c.clap_version = CLAP_VERSION_INIT;
       c.id = m->clapId.c_str();
       c.name = m->name.c_str();
-      c.vendor = m->type == "gl.plasma" ? "ML Studio" : "Gridline";
+      c.vendor = m->type == "gl.plasma" ? "AQUILA" : "Gridline";
       c.url = "https://github.com/lolitemaultes/Gridline";
       c.manual_url = "";
       c.support_url = "";

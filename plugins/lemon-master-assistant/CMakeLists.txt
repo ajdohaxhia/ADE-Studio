@@ -75,7 +75,7 @@ endif()
 
 # Create the plugin target
 juce_add_plugin(oXygen
-    COMPANY_NAME "ML Studio"
+    COMPANY_NAME "AQUILA"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE

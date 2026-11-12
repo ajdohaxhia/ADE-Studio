@@ -394,6 +394,8 @@ pub const SPEC: &Spec = &Spec {
     parse,
     sound,
     rings: true,
+    blank: None,
+    locate: None,
 };
 pub struct HallKind;
 impl Kind for HallKind {

@@ -157,7 +157,7 @@ mod tests {
         app.key(&f8, true, false);
         assert!(!is_open(&app.state), "and closes it");
 
-        let i = (0..).map_while(|i| menus::item_at(VIEW, i)).position(|it| it.label == "Project picker").expect("VIEW entry");
+        let i = (0..).map_while(|i| menus::item_at(VIEW, i)).position(|it| it.label == "Clip palette").expect("VIEW entry");
         assert!(menus::works(VIEW, menus::item_at(VIEW, i).unwrap()));
         app.menu_item(VIEW, i);
         assert!(is_open(&app.state));
@@ -175,6 +175,6 @@ mod tests {
         app.mouse_move(b.cx(), b.cy());
         app.mouse_down_right();
         app.mouse_up();
-        assert!(crate::plugin_menu::is_open(&app.state), "right click: the plugin menu");
+        assert!(crate::plugin_palette::is_open(&app.state), "right click: the plugin menu");
     }
 }

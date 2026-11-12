@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Refresh the icon used by an existing ML Studio desktop entry in the user's icon theme.
+//! Refresh the icon used by an existing AQUILA desktop entry in the user's icon theme.
 
 use std::fs;
 use std::io::{self, Write};

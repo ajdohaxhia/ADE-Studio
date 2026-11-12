@@ -209,7 +209,13 @@ pub struct MidiIn {
 }
 
 /// The name Lemon Studio's connections show in the system's MIDI routing (ALSA / JACK clients).
-pub const CLIENT: &str = "ML Studio";
+pub const CLIENT: &str = "AQUILA";
+
+/// Whether `name` is one of Lemon Studio's own ports (ALSA lists the ports of its output connections as inputs too):
+/// read, it would hear everything Lemon Studio sends (its MIDI out, the clock) as if a device had played it.
+pub fn own(name: &str) -> bool {
+    name.strip_prefix(CLIENT).is_some_and(|rest| rest.starts_with(':'))
+}
 
 /// How often the watcher lists the devices.
 const WATCH: Duration = Duration::from_secs(2);
@@ -231,7 +237,7 @@ fn input_names() -> Vec<String> {
 
 fn output_names() -> Vec<String> {
     let Ok(m) = midir::MidiOutput::new(CLIENT) else { return Vec::new() };
-    unique(m.ports().iter().map(|p| m.port_name(p).unwrap_or_default()).collect())
+    unique(m.ports().iter().map(|p| m.port_name(p).unwrap_or_default()).collect()).into_iter().filter(|n| !own(n)).collect()
 }
 
 impl MidiIn {
@@ -281,10 +287,13 @@ impl MidiIn {
     pub fn refresh(&mut self) -> Vec<String> {
         let names = input_names();
         self.outputs = output_names();
-        self.conns.retain(|(n, _)| names.contains(n) && crate::midi_cfg::input(n).enabled);
+        self.conns.retain(|(n, _)| names.contains(n) && crate::midi_cfg::input(n).enabled && !own(n));
         let mut opened = Vec::new();
         let mut inputs = Vec::with_capacity(names.len());
         for (i, name) in names.iter().enumerate() {
+            if own(name) {
+                continue;
+            }
             let want = crate::midi_cfg::input(name).enabled;
             let mut failed = false;
             if want && !self.conns.iter().any(|(n, _)| n == name) {
@@ -358,6 +367,7 @@ mod tests {
         assert_eq!(parse(&[0xd2, 99]), Some(Msg::Pressure { ch: 2, v: 99 }));
         assert_eq!(parse(&[0xc0, 5]), Some(Msg::Program { ch: 0, p: 5 }));
         assert_eq!(parse(&[0xf2, 0x10, 0x01]), Some(Msg::Spp(144)));
+        assert!(own("AQUILA:AQUILA 131:0") && !own("AQUILA test:out 130:0") && !own("Launchkey MK4 61:Launchkey MK4 61 MIDI In 24:0"));
         assert_eq!(parse(&[0xfa]), Some(Msg::Start));
         assert_eq!(parse(&[0xf8]), None, "the clock is not a message here");
         assert_eq!(Msg::Bend { ch: 4, v: 8192 }.bytes(), Some([0xe0, 0, 64]), "sent on channel 1");
@@ -379,13 +389,17 @@ mod tests {
         c.choose(Some("Keys".into()));
         assert_eq!(c.status().text(), "Status: ready");
         c.feed("Keys", 0xfa, &[0xfa], nothing);
+        let start = Instant::now();
         for _ in 0..30 {
             c.feed("Keys", 0xf8, &[0xf8], nothing);
             std::thread::sleep(Duration::from_millis(2));
         }
+        let took = start.elapsed().as_secs_f64();
         let s = c.status();
         assert_eq!(s.beat, Some(2), "30 clocks after Start: beat 2");
-        assert!(s.tempo.is_some_and(|t| t > 100.0 && t < 1300.0), "{s:?}");
+        // The tempo of the clocks as they came: at least 2 ms apart (1250 BPM at most), and on a loaded machine
+        // perhaps much further, but never slower than the whole loop's time gives.
+        assert!(s.tempo.is_some_and(|t| t < 1300.0 && t >= 0.999 * 60.0 / took), "{s:?} over {took} s");
         c.feed("Keys", 0xfc, &[0xfc], nothing);
         assert_eq!(c.status().text(), "Status: ready");
         assert!(!c.feed("Other", 0xfa, &[0xfa], nothing), "another device's clock is not followed");
@@ -404,7 +418,7 @@ mod tests {
         }
         let midi = MidiIn::open(wake);
         let names = midi.open_names();
-        let out = midir::MidiOutput::new("ML Studio test").expect("MIDI output");
+        let out = midir::MidiOutput::new("AQUILA test").expect("MIDI output");
         let port = out.ports().into_iter().find(|p| out.port_name(p).is_ok_and(|n| names.contains(&n)));
         let Some(port) = port else { panic!("no loopback port among the inputs {names:?}") };
         let mut conn = out.connect(&port, "loopback").expect("open the loopback output");

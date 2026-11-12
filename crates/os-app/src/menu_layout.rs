@@ -144,7 +144,7 @@ impl Menu {
             }
             Self::Mixer => crate::mixer::default_options_menu(s, 0., 0.).items,
             Self::MixerTrack => crate::mixer::default_track_menu(s, s.selected_mixer, 0., 0.).items,
-            Self::MixerSlot => crate::mixer::default_slot_menu(s, 0, 0., 0.).items,
+            Self::MixerSlot => crate::mixer::default_slot_menu(s, None, 0, 0., 0.).items,
             Self::Browser => crate::browser::default_options_menu(s),
             Self::Main(i) => crate::views::menus::default_organized_items(s, i, true),
         }

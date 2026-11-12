@@ -28,12 +28,13 @@ pub const SETTINGS: [Setting; dsp::PARAMS] = [
 ];
 
 /// Editor layout (spec §2), as the original's: the separation, the phase offset between its placement and the
-/// inversion, then the pan and the volume.
+/// inversion, then the pan and the volume. The page's ranges end before their last number (6 px apart, 8 px from the
+/// edges); a card's `x1` and `y1` are its last pixels.
 const CARDS: [Card; 4] = [
-    Card { x0: 8.0, x1: 84.0, y0: 28.0, y1: 116.0, heading: "STEREO SEP" },
-    Card { x0: 90.0, x1: 256.0, y0: 28.0, y1: 116.0, heading: "PHASE OFFSET" },
-    Card { x0: 262.0, x1: 334.0, y0: 28.0, y1: 116.0, heading: "INVERT" },
-    Card { x0: 340.0, x1: 492.0, y0: 28.0, y1: 116.0, heading: "OUTPUT" },
+    Card { x0: 8.0, x1: 83.0, y0: 28.0, y1: 115.0, heading: "STEREO SEP" },
+    Card { x0: 90.0, x1: 255.0, y0: 28.0, y1: 115.0, heading: "PHASE OFFSET" },
+    Card { x0: 262.0, x1: 333.0, y0: 28.0, y1: 115.0, heading: "INVERT" },
+    Card { x0: 340.0, x1: 491.0, y0: 28.0, y1: 115.0, heading: "OUTPUT" },
 ];
 
 const CONTROLS: [Control; 6] = [
@@ -48,12 +49,14 @@ const CONTROLS: [Control; 6] = [
 pub const SPEC: &Spec = &Spec {
     name: "ML Stereo Enhancer",
     word: "STEREO ENHANCER",
-    about: "ML Studio's stereo enhancer",
+    about: "AQUILA's stereo enhancer",
     settings: &SETTINGS,
     version: None,
     any_version: false,
     fields: &[],
     tail: &[],
+    blank: None,
+    locate: None,
     size: (500, 154),
     cards: &CARDS,
     controls: &CONTROLS,
@@ -158,7 +161,7 @@ pub struct StereoEnhancerKind;
 impl Kind for StereoEnhancerKind {
     const SPEC: &'static Spec = SPEC;
     const CLAP_ID: &'static str = "org.openstudio.lemon-stereo-enhancer";
-    const CLAP_DESCRIPTION: &'static str = "ML Studio's stereo enhancer";
+    const CLAP_DESCRIPTION: &'static str = "AQUILA's stereo enhancer";
     const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::AudioEffect, ClapFeature::Utility, ClapFeature::Mixing, ClapFeature::Stereo];
     const VST3_CLASS_ID: [u8; 16] = *b"LemonStudioStEnh";
     const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] = &[Vst3SubCategory::Fx, Vst3SubCategory::Spatial];

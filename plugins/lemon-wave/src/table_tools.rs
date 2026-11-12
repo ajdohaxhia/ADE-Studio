@@ -124,7 +124,7 @@ pub fn root() -> PathBuf {
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
         .unwrap_or_default()
-        .join("Lemon Studio/Lemon Wave/User Wavetables")
+        .join("AQUILA/Lemon Wave/User Wavetables")
 }
 pub fn suggested_name(s: &str) -> String {
     let s: String = s
