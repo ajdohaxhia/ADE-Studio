@@ -360,7 +360,8 @@ fn logo(ui: &mut Ui, spec: &Spec) -> Rect {
     let wb = lemon::spaced_width(ui.c, MARK_BIG, spec.word, 2.0);
     let total = 14.0 + ws + 8.0 + wb;
     let left = (x - total * anchor).round();
-    let right = left + total;
+    // Preserve the specified right edge instead of rounding the left edge first.
+    let right = x + total * (1.0 - anchor);
     let bx = (right - wb).round();
     lemon::spaced(ui.c, MARK_BIG, bx, (y - lh_b / 2.0).round(), plug::WORDMARK, spec.word, 2.0);
     let sx = (bx - 8.0 - ws).round();

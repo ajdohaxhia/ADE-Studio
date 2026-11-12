@@ -1142,7 +1142,7 @@ impl Logic {
             (8, true) => Cmd::Copy,
             (9, false) => Cmd::Tool(ToolCmd::Reverse),
             (9, true) => Cmd::Tool(ToolCmd::Swap),
-            (12, _) if crate::stretch::visible() => Cmd::Stretch,
+            (12, false) if crate::stretch::visible() => Cmd::Stretch,
             (14, _) if crate::cleanup::visible() => Cmd::Cleanup,
             (11, false) => Cmd::Tool(ToolCmd::FadeOut),
             (11, true) => Cmd::Tool(ToolCmd::DeclickOut),
@@ -3760,9 +3760,9 @@ mod tests {
         s.add_cue("after", 30000, None);
         load(&mut l, s);
         l.doc(|d| d.select(10000, 19999));
-        let (x, y) = centre(&l, Target::Tool(12));
-        l.down(x, y, Btn::Left, Mods::default(), false);
-        l.up(Btn::Left);
+        // Exercise the legacy stretch DSP panel directly; the toolbar opens ML Studio's
+        // asynchronous stretch editor, covered by stretch_interaction_tests.
+        l.pick(&MenuReq::Main(MenuId::Tools), Cmd::Tool(ToolCmd::Stretch), 0.0, 0.0);
         assert!(l.view.amp.is_some_and(|a| a.stretch.is_some()), "the stretch panel is open");
         paint(&mut l);
         // Time +0.5: twice as long.

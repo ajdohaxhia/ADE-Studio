@@ -2631,6 +2631,10 @@ fn write_sampler(
 /// ([`upgrade`]), which is the layout it is saved in.
 pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> {
     upgrade(file)?;
+    // An unchanged import must keep its stream, including the absence of native extension chunks.
+    if project == &load(file)? {
+        return Ok(());
+    }
     restructure(project, file)?;
     // The file's effect slots as they are before inserts are added or removed: a renumbered track takes its own.
     let (file_slots, file_tracks) = file_slot_runs(file)?;

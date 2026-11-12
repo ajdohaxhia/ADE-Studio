@@ -15037,14 +15037,14 @@ mod tests {
         frame(&mut app, &mut a, None);
         let r = hit_rect(&app, &Action::Tempo);
         let (t0, steps) = (app.state.tempo, app.state.history.at());
-        let x = app.state.tempo_digits.get()[0] - 4.0;
+        let x = (app.state.tempo_digits.get()[0] - 4.0) * views::band_k(&app.state);
         app.mouse_move(x, r.cy());
         app.mouse_down();
         app.mouse_up();
         assert_eq!(app.state.history.at(), steps, "a click on the tempo");
         app.mouse_down();
-        app.mouse_move(x, r.cy() - 10.0);
-        app.mouse_move(x, r.cy() - 20.0);
+        app.mouse_move(x, r.cy() - 60.0);
+        app.mouse_move(x, r.cy() - 120.0);
         app.mouse_up();
         assert_eq!((app.state.tempo, app.state.history.at()), (t0 + 20.0, steps + 1));
         assert_eq!(crate::history::undo(&mut app.state).as_deref(), Some(TEMPO));
@@ -18225,7 +18225,7 @@ mod tests {
             _ => None,
         }).collect();
         assert_eq!(tabs, [
-            settings::GENERAL, settings::AUDIO, settings::FILE, settings::MIDI, settings::PLUGINS,
+            settings::GENERAL, settings::AUDIO, settings::RECORDING, settings::FILE, settings::MIDI, settings::PLUGINS,
             settings::THEME, settings::DEBUG, settings::PROJECT, settings::VISIBILITY, settings::MENUS,
             settings::CONTROLS, settings::INFO, settings::ABOUT,
         ]);
@@ -21921,7 +21921,7 @@ mod tests {
         app.act(Action::ToggleWin(Win::ChannelRack));
         frame(&mut app, &mut a, None);
 
-        // Open the generator picker through "+" and add enough rows to check automatic sizing.
+        // Open the instrument palette through "+" and add enough rows to check automatic sizing.
         app.plugins = crate::plugins::Plugins::builtins();
         app.state.plugdb.rebuild(&app.plugins);
         let n = app.state.project.channels.len();
@@ -21929,12 +21929,12 @@ mod tests {
         for _ in 0..6 {
             let hr = hit_rect(&app, &Action::RackAdd);
             click(&mut app, &mut a, hr);
-            let picker = app.state.playlist.popup.as_ref().unwrap().items[0].cmd.clone();
-            assert_eq!(picker, crate::playlist::Cmd::Plugin(crate::plugin_menu::PlugCmd::Picker(crate::plugin_menu::Target::Gen(None))));
-            crate::playlist::run(&mut app, picker);
-            crate::plugin_picker::act(&mut app, crate::plugin_picker::Hit::Tile(false, sampler));
-            crate::plugin_picker::act(&mut app, crate::plugin_picker::Hit::Choose);
-            assert!(!app.state.plugin_picker.open && app.state.playlist.popup.is_none());
+            assert!(crate::plugin_palette::is_open(&app.state));
+            let row = crate::plugin_palette::rows(&app.state).iter().position(|row| {
+                matches!(crate::plugin_palette::pick_cmd(&app.state, row), Some(crate::playlist::Cmd::Plugin(crate::plugin_menu::PlugCmd::Generator { index, .. })) if index == sampler)
+            }).expect("sampler in the instrument palette");
+            app.palette_act(crate::plugin_palette::PalAct::Row(row));
+            assert!(!crate::plugin_palette::is_open(&app.state) && app.state.playlist.popup.is_none());
             frame(&mut app, &mut a, None);
         }
         assert_eq!(app.state.project.channels.len(), n + 6);
@@ -22858,13 +22858,13 @@ mod tests {
             assert_eq!(mine(&app), drawn, "{tool:?}: no note added or moved");
             assert_eq!(app.state.piano.selection(app.state.pattern, ch).len(), 2, "{tool:?}");
             assert!(app.state.piano.overlay.is_none(), "marquee gone after release");
-            // Ctrl+click on the third note: that note only.
+            // ML Studio Ctrl+click adds the third note to the selection.
             app.ctrl = true;
             click(&mut app, &mut c, g.x_of(192.0) + 4.0, row(60));
             app.ctrl = false;
             let sel = app.state.piano.selection(app.state.pattern, ch);
-            assert_eq!(sel.len(), 1, "{tool:?}");
-            assert_eq!(piano::notes(&app.state)[sel[0]].position, 192);
+            assert_eq!(sel.len(), 3, "{tool:?}");
+            assert!(sel.iter().any(|&i| piano::notes(&app.state)[i].position == 192));
             assert_eq!(mine(&app), drawn);
         }
         // Without Ctrl, Draw still adds a note.
@@ -27375,6 +27375,9 @@ mod tests {
         crate::playlist::run(&mut a,crate::playlist::Cmd::Reset(crate::knobs::Control::Fader(1)));
         let volumes=|a:&App|[1,2,3].map(|n|crate::mixer::track(&a.state,n).unwrap().volume);
         assert_eq!(volumes(&a),[Some(0.8),Some(0.45),Some(0.8)]);
+        let steps = a.state.history.len();
+        crate::playlist::run(&mut a,crate::playlist::Cmd::Reset(crate::knobs::Control::Fader(1)));
+        assert_eq!(a.state.history.len(), steps, "resetting default values adds no undo step");
         crate::history::undo(&mut a.state).unwrap();assert_eq!(volumes(&a),[Some(0.2),Some(0.45),Some(0.95)]);
         crate::history::redo(&mut a.state).unwrap();assert_eq!(volumes(&a),[Some(0.8),Some(0.45),Some(0.8)]);
         let solo=crate::mixer::track_menu(&a.state,1,0.,0.).items.into_iter().find(|i|i.label=="Solo selected tracks").unwrap().cmd;crate::playlist::run(&mut a,solo);assert!(crate::mixer::track(&a.state,1).unwrap().enabled&&crate::mixer::track(&a.state,3).unwrap().enabled);assert!(!crate::mixer::track(&a.state,2).unwrap().enabled);
@@ -28784,46 +28787,27 @@ mod tests {
         assert!(shade(0.1) == shade(0.45) && shade(0.45) != shade(0.55) && shade(0.55) == shade(0.95), "two bars over the width");
     }
 
-    /// The rack's preview options (spec: ui/channel-rack.md §17): Show a mute button on the piano roll preview puts the
-    /// LED's switch on the preview; Show complete piano roll preview unticked lays the preview under the steps.
+    /// ML Studio's rack keeps the mute LED beside the preview; the preview opens its channel's piano roll.
     #[test]
-    fn rack_preview_mute_button_and_preview_under_the_steps() {
+    fn rack_preview_keeps_mute_led_and_opens_piano_roll() {
         let mut app = App::new(None);
         let Ok(mut c) = Canvas::new(1920, 1080, 1.0) else { return };
         app.state.rack_roll_view = true;
-        app.state.rack_size.0 = views::rack::DEFAULT_SIZE.0 + 320.0;
-        let ch = app.state.project.channels[1].index;
-        let ps = crate::rack::per_step(&app.state);
-        let n = app.state.pattern.max(1);
-        crate::patterns::pat_mut(&mut app.state, n).notes.push(os_model::Note { length: ps, ..os_model::Note::step(ch, 12 * ps) });
         app.state.raise(Win::ChannelRack);
         frame(&mut app, &mut c, None);
         let roll = hit_rect(&app, &Action::RackRoll(1));
         let button = hit_rect(&app, &Action::ChannelEnable(1));
-        assert!(roll.contains(button.cx(), button.cy()), "the button is on the preview");
+        assert!(!roll.contains(button.cx(), button.cy()), "the mute LED stays beside the preview");
+        assert!(!app.hits.iter().any(|h| matches!(h.action, Action::Step(1, _))));
+        let enabled = app.state.project.channels[1].enabled;
         click(&mut app, &mut c, button);
-        assert!(!app.state.project.channels[1].enabled);
-        crate::rack::run(&mut app, crate::rack::RCmd::Opt(crate::rack::PREVIEW_MUTE));
-        frame(&mut app, &mut c, None);
-        let led = hit_rect(&app, &Action::ChannelEnable(1));
-        assert!(!roll.contains(led.cx(), led.cy()), "only the LED");
-
-        // The steps' columns, from the first row's steps (the second row, with a long note, shows its preview).
+        assert_eq!(app.state.project.channels[1].enabled, !enabled);
+        click(&mut app, &mut c, roll);
+        assert_eq!((app.state.z.last(), app.state.selected_channel), (Some(&Win::PianoRoll), 1));
         app.state.rack_roll_view = false;
+        app.state.raise(Win::ChannelRack);
         frame(&mut app, &mut c, None);
-        let x = |k: u32| (hit_rect(&app, &Action::Step(0, k)).x + 6.0) as u32;
-        let (x10, x12) = (x(10), x(12));
-        app.state.rack_roll_view = true;
-        let column = |c: &Canvas, x: u32| (roll.y as u32 + 2..roll.bottom() as u32 - 2).map(|y| c.pixmap.pixel(x, y).unwrap()).collect::<Vec<_>>();
-        let both = |app: &mut App, c: &mut Canvas| {
-            frame(app, c, None);
-            (column(c, x10), column(c, x12))
-        };
-        let (a, b) = both(&mut app, &mut c);
-        assert_eq!(a, b, "complete: the note is not under its step");
-        crate::rack::run(&mut app, crate::rack::RCmd::Opt(crate::rack::COMPLETE_PREVIEW));
-        let (a, b) = both(&mut app, &mut c);
-        assert_ne!(a, b, "under the steps: the note is under step 12");
+        assert!(app.hits.iter().any(|h| matches!(h.action, Action::Step(1, _))));
     }
 
     /// The Toolbars menu (spec: ui/toolbar-menu.md §8): on the hint panel, on bare toolbar background and as VIEW >

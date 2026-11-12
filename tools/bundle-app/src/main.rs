@@ -112,7 +112,7 @@ fn info_plist(id: &Identity) -> String {
 	<key>CFBundleName</key>
 	<string>{name}</string>
 	<key>CFBundleDisplayName</key>
-	<string>AQUILA</string>
+	<string>{name}</string>
 	<key>CFBundleExecutable</key>
 	<string>{EXE}</string>
 	<key>CFBundleIdentifier</key>
@@ -135,8 +135,6 @@ fn info_plist(id: &Identity) -> String {
 	<string>AQUILA uses your audio input to record vocals and instruments into your projects.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>AQUILA records and monitors your audio inputs on its mixer tracks.</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
@@ -174,8 +172,11 @@ mod tests {
             assert_eq!(id.icon, "lemonstudio");
             assert!(plist.contains("<string>AQUILA</string>") && plist.contains("<string>io.github.itsalphaneon.lemonstudio</string>"), "{plist}");
         }
-        // Both name the icon in the catalog as macos-icon.sh compiles it.
+        // The generated ICNS file provides the icon; the legacy catalog stays for updater compatibility.
         let nightly = info_plist(&identity(Some("nightly")));
-        assert!(nightly.contains("<key>CFBundleIconName</key>\n\t<string>lemonstudio</string>"), "{nightly}");
+        assert!(nightly.contains("<key>CFBundleIconFile</key>\n\t<string>lemonstudio</string>"), "{nightly}");
+        assert!(!nightly.contains("<key>CFBundleIconName</key>"));
+        assert!(nightly.contains("<key>CFBundleDisplayName</key>\n\t<string>AQUILA Nightly</string>"));
+        assert_eq!(nightly.matches("<key>NSMicrophoneUsageDescription</key>").count(), 1);
     }
 }

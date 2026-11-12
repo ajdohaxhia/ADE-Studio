@@ -4631,7 +4631,7 @@ mod chop_integration_tests {
         let file=std::env::temp_dir().join(format!("lemon-chop-host-{}.wav",std::process::id()));
         let mut bytes=Vec::new();os_engine::wav::write_f32_stereo_header(&mut bytes,48000,48000).unwrap();
         for i in 0..48000 {let v=(std::f32::consts::TAU*220.*i as f32/48000.).sin()*0.2;bytes.extend_from_slice(&v.to_le_bytes());bytes.extend_from_slice(&v.to_le_bytes());}std::fs::write(&file,bytes).unwrap();
-        let mut p=Plugins::builtins();let index=p.index_of("ML Chop").expect("instrument offered");p.create(0,index).unwrap();
+        let mut p=Plugins::builtins();p.rate=48000;let index=p.index_of("ML Chop").expect("instrument offered");p.create(0,index).unwrap();
         let state=p.state(0).unwrap();let mut json:serde_json::Value=serde_json::from_slice(&state[8..]).unwrap();
         let mut doc=Document{path:file.to_string_lossy().into_owned(),..Default::default()};doc.cues[0]=Cue{start:0.,end:0.25,enabled:true,name:"Test cue".into(),..Default::default()};
         json["fields"]["chop-document"]=serde_json::json!(serde_json::to_string(&doc).unwrap());
@@ -4648,7 +4648,7 @@ mod chop_integration_tests {
         let mut routed:serde_json::Value=serde_json::from_slice(&saved[8..]).unwrap();
         routed["params"]["pad1_output"]=serde_json::json!({"f32":1.0});
         let payload=serde_json::to_vec(&routed).unwrap();let mut state=(payload.len() as u64).to_le_bytes().to_vec();state.extend(payload);
-        let mut routed=Plugins::builtins();routed.create_with(0,index,Some(&state)).unwrap();
+        let mut routed=Plugins::builtins();routed.rate=48000;routed.create_with(0,index,Some(&state)).unwrap();
         let i=routed.hosted[&0].plugin.clone();let mut i=i.lock().unwrap();
         assert_eq!(i.extra_outputs(),15);i.note_on(0,36,1.);
         let(mut l,mut r)=(vec![0.;8192],vec![0.;8192]);i.process(48000,&mut l,&mut r);
@@ -4674,6 +4674,7 @@ mod chop_drop_tests {
         std::fs::write(&file,&wav).unwrap();std::fs::write(&second,&wav).unwrap();
         let mut app=crate::app::App::new(None);
         app.plugins=Plugins::builtins();
+        app.plugins.rate=48000; // Match the explicit process rate, independently of the system device.
         let row=crate::app::add_plugin_channel(&mut app.state.project,"ML Chop");
         app.plugins.create(row,app.plugins.index_of("ML Chop").unwrap()).unwrap();
         app.state.hosted_rows.push(row);

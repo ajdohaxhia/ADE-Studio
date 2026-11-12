@@ -272,7 +272,7 @@ const FILE: &[Item] = &[
 /// The project's undo history (spec: ui/settings-choices.md "Undo history: the four checks (2026-10-16)"): the first
 /// entry names what Ctrl+Z does next, Redo (Ctrl+Alt+Z) is there with Alternate undo mode on and a history to act on
 /// (`label_now`, `in_menu`).
-const EDIT: &[Item] = &[it("Undo", "Ctrl+Z").cmd(MenuCmd::Undo), it("Redo", "Ctrl+Alt+Z").cmd(MenuCmd::Redo), it("Undo history", "")];
+const EDIT: &[Item] = &[it("Undo", "Ctrl+Z").cmd(MenuCmd::Undo), it("Redo", "Ctrl+Alt+Z").cmd(MenuCmd::Redo), it("Undo history", "").cmd(MenuCmd::Jump(crate::browser::Jump::Section("History")))];
 
 const ADD_PLUGINS: &[Item] = &[
     it("More plugins...", "").on().cmd(MenuCmd::MorePlugins),

@@ -537,14 +537,20 @@ impl crate::app::App {
                 if crate::mixer::locked(s, t) { return; }
                 let tracks = crate::mixer::fader_group(s, t).into_iter().map(|(n, _)| n).collect::<Vec<_>>();
                 let v = os_model::MixerTrack::new(t).volume.unwrap_or(0.8);
-                crate::control::knob_edit(s, crate::history::MIXER_VOLUME, crate::control::command::Region::Track(t), |s| {
-                    for &n in &tracks {
-                        if let Some(m) = crate::mixer::track_mut(s, n) {
-                            m.volume = Some(v);
-                        }
+                // A reset changes every selected fader; retain each value in the same undo step.
+                let before: Vec<_> = tracks.iter().filter_map(|&n| {
+                    let m = crate::mixer::track(s, n)?;
+                    (m.volume != Some(v)).then_some(crate::history::Snap::Fader(n, m.volume))
+                }).collect();
+                if !before.is_empty() && crate::prefs::check(&crate::prefs::UNDO_KNOB_TWEAKS) {
+                    crate::history::record(s, crate::history::MIXER_VOLUME, crate::history::Snap::Several(before));
+                }
+                for &n in &tracks {
+                    if let Some(m) = crate::mixer::track_mut(s, n) {
+                        m.volume = Some(v);
                     }
-                    s.piano.dirty = true;
-                });
+                }
+                s.piano.dirty = true;
                 self.hint = Cow::Owned(crate::mixer::level_text("Volume", v));
             }
             Control::ChanPitch(row) => {

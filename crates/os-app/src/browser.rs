@@ -981,8 +981,7 @@ impl Jump {
         }
     }
 
-    /// The jump behind entry `label` of menu `menu`. `None` for other entries, and for a section the tree does not list
-    /// (History, Remote control: their entries stay greyed out).
+    /// The jump behind entry `label` of menu `menu`. `None` for other entries or sections the tree does not list.
     pub fn from_label(menu: usize, label: &str) -> Option<Jump> {
         use crate::views::menus::{ADD_MENU, TOOLS_MENU, VIEW};
         let j = match (menu, label) {

@@ -697,7 +697,12 @@ impl App {
             Target::Member(m, k, id, wet) => {
                 crate::container::set_level_run(&mut self.state, m, k, id, wet, v);
                 if let Some(target) = crate::container::level_target(&self.state, m, k, id, wet) {
-                    self.record_param(target, (0.0, 1.0), f64::from(v));
+                    if crate::record::Opt::Smart.on() {
+                        let name = crate::container::level_name(&self.state, m, k, id, wet);
+                        self.smart_record_value(target, name, f64::from(v));
+                    } else {
+                        self.record_param(target, (0.0, 1.0), f64::from(v));
+                    }
                 }
             }
             // One undo step for each track the box moves to, and each switch of the LED (`typein::set_value`).
@@ -890,6 +895,51 @@ pub fn is_open(s: &State) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_fader_and_container_levels_record_in_smart_mode() {
+        use crate::{container, record::Opt};
+        let mut app = App::new(None);
+        app.state.project = crate::app::test_project();
+        app.state.project.mixer[2].slots[0] = Some(os_model::SlotPlugin {
+            id: os_model::Id::NONE, name: container::CONTAINER.into(),
+            state: container::encode(&[container::Member {
+                id: 1, name: "Effect".into(), wet: 1., ..Default::default()
+            }]),
+        });
+        app.record_menu(0., 0.);
+        app.state.playlist.popup = None;
+        crate::playlist::run(&mut app, crate::playlist::Cmd::Record(Opt::Automation));
+        app.toggle_record();
+        app.transport.pretend_at(24., false);
+        app.remote_set(Target::Fader(1), 0.3);
+        app.remote_set(Target::Member(2, 0, 1, true), 0.6);
+        assert_eq!(app.state.project.automations.len(), 2);
+        for (target, value) in [
+            (os_model::target::mixer(1, os_model::target::MIXER_VOLUME), 0.3),
+            (container::level_target(&app.state, 2, 0, 1, true).unwrap(), 0.6),
+        ] {
+            let curve = app.state.project.automations.iter().find(|a| a.target() == Some(target)).unwrap();
+            assert!((curve.points.last().unwrap().value - value).abs() < 1e-6);
+        }
+        assert!(app.state.project.pattern(app.state.pattern).unwrap().controls.is_empty());
+        for target in [Target::Fader(1), Target::Member(2, 0, 1, true)] {
+            app.transport.stop();
+            crate::mixer_recording::flag(Opt::Wait, true);
+            crate::mixer_recording::flag(Opt::WaitFilter, true);
+            crate::mixer_recording::flag(Opt::Automation, false);
+            app.state.rec.waiting = true;
+            app.remote_set(target, 0.4);
+            assert!(app.state.rec.waiting && !app.transport.playing(),
+                "a filtered automation input must keep waiting");
+            crate::mixer_recording::flag(Opt::Automation, true);
+            app.smart_record_value(os_model::target::TEMPO, "Tempo".into(), f64::NAN);
+            assert!(app.state.rec.waiting, "invalid input must not start playback");
+            app.remote_set(target, 0.5);
+            assert!(!app.state.rec.waiting && app.transport.playing(),
+                "remote automation must release Start on input");
+        }
+    }
 
     #[test]
     fn controller_relative_encoders_move_from_the_current_parameter() {

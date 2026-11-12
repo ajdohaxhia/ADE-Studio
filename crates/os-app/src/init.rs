@@ -319,6 +319,8 @@ mod tests {
     #[test]
     fn create_automation_clip_lists_the_control_while_the_check_is_on() {
         let mut a = app();
+        let groups_before = a.state.rack.groups.clone();
+        let filter_before = a.state.rack.filter;
         assert!(prefs::check(&prefs::INIT_CONTROLS), "on by default");
         let vol = target::channel(0, target::CHANNEL_VOLUME);
         let (t, name, v) = a.automation_target(&Action::Knob(KnobId::ChanVol(0))).unwrap();
@@ -335,7 +337,8 @@ mod tests {
         assert_eq!(history::undo(&mut a.state).as_deref(), Some(history::CREATE_AUTOMATION));
         assert!(a.state.project.init_controls.is_empty() && pl::clips(&a.state).is_empty());
         assert_eq!(a.state.project.channels.len(), channels - 1, "the clip's channel goes with the undo");
-        assert!(a.state.rack.groups.iter().all(|g| g.name != "Automation") && a.state.rack.filter == crate::rack::Filter::All);
+        assert_eq!(a.state.rack.groups, groups_before);
+        assert_eq!(a.state.rack.filter, filter_before);
         assert_eq!(history::redo(&mut a.state).as_deref(), Some(history::CREATE_AUTOMATION));
         assert_eq!((a.state.project.channels.len(), a.state.rack.filter), (channels, crate::rack::Filter::Group(g)));
         assert_eq!((a.state.project.init_controls.clone(), pl::clips(&a.state).len()), (vec![rec(vol, 10000)], 1));

@@ -765,14 +765,14 @@ impl Logic {
             Target::Fader(k) => step(self, &if k == MAIN_FADER { MAIN_ID.to_string() } else { level_id(k) }, 0.5 / 36.0),
             Target::Freq(k) => step(self, &freq_id(k), 1.0 / 128.0),
             // One step per notch (spec §7); fractions of a notch add up until they make one.
-            Target::TypeTab(k) | Target::OrderMark(k) => {
+            Target::TypeTab(k) | Target::BandMenu(k) | Target::OrderMark(k) => {
                 let acc = self.notch.take().filter(|(n, _)| *n == t).map_or(0.0, |(_, a)| a) + notches;
                 let d = acc.trunc();
                 self.notch = Some((t, acc - d));
                 if d == 0.0 {
                     return vec![];
                 }
-                let id = if matches!(t, Target::TypeTab(_)) { type_id(k) } else { order_id(k) };
+                let id = if matches!(t, Target::TypeTab(_) | Target::BandMenu(_)) { type_id(k) } else { order_id(k) };
                 let n = self.vals.plain_to_norm(&id, self.vals.plain(&id) + d);
                 self.vals.edit(&id, n);
             }
@@ -1656,21 +1656,6 @@ mod tests {
         l.hits = view::paint(&mut c, &look, &l.view);
     }
 
-    /// The editor as `0x00RRGGBB` pixels, and the one at (x, y).
-    fn pixels(l: &mut Logic) -> Vec<u32> {
-        let mut c = os_ui::Canvas::new(view::W, view::H, 1.0).unwrap();
-        let extra = l.params.extra_copy();
-        let look = view::Look { s: l.shown(), extra: &extra, spectrum: None, rate: 48000.0 };
-        l.hits = view::paint(&mut c, &look, &l.view);
-        let mut px = vec![0u32; (view::W * view::H) as usize];
-        c.copy_to_xrgb(&mut px);
-        px
-    }
-
-    fn at(px: &[u32], x: f32, y: f32) -> u32 {
-        px[y as usize * view::W as usize + x as usize]
-    }
-
     fn centre(l: &Logic, t: Target) -> (f32, f32) {
         let h = l.hits.iter().rev().find(|h| h.t == t).unwrap_or_else(|| panic!("no hit {t:?}"));
         (h.r.cx(), h.r.cy())
@@ -1844,7 +1829,10 @@ mod tests {
     #[test]
     fn tab_wheel_moves_a_step_per_notch_and_adds_up_fractions() {
         let mut l = logic();
-        let (tab, mark) = (centre(&l, Target::TypeTab(1)), centre(&l, Target::OrderMark(1)));
+        l.select(1);
+        l.view.details_open = true;
+        paint(&mut l);
+        let (tab, mark) = (centre(&l, Target::BandMenu(1)), centre(&l, Target::OrderMark(1)));
         let at = |l: &Logic| (l.vals.plain(&type_id(1)) as i32, l.vals.plain(&order_id(1)) as i32);
         let k0 = at(&l).0;
         l.wheel(tab.0, tab.1, 0.5, Mods::default());
@@ -1862,17 +1850,17 @@ mod tests {
     }
 
 
-    /// The FREQ and BW captions (right-aligned at x ~545, spec §3) stay clear of band 1's knobs.
+    /// The modern details panel's knob hit areas include their captions and remain separate.
     #[test]
     fn the_knob_captions_stay_clear_of_band_1s_knobs() {
         let mut l = logic();
-        let p = pixels(&mut l);
-        let bg = at(&p, 544.0, 303.0);
-        for y in (306..323).chain(328..345) {
-            for x in [544.0, 545.0] {
-                assert_eq!(at(&p, x, y as f32), bg, "({x}, {y})");
-            }
-        }
+        l.select(0);
+        l.view.details_open = true;
+        paint(&mut l);
+        let rect = |t| l.hits.iter().find(|h| h.t == t).expect("details knob").r;
+        let (freq, gain, q) = (rect(Target::Freq(0)), rect(Target::Fader(0)), rect(Target::Q(0)));
+        assert!(freq.right() < gain.x);
+        assert!(gain.right() < q.x);
     }
 
     /// Of the values that show a typed text the current one stays, then the default; else the nearest.

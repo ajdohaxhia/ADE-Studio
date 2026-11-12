@@ -613,6 +613,10 @@ impl App {
     /// A plugin parameter set from outside its window (a remote control) to `level`, for automation recording.
     pub(crate) fn record_plugin_param(&mut self, key: usize, index: usize, level: f64) {
         let Some(target) = target_of(&self.state, key, index) else { return };
+        if crate::record::Opt::Smart.on() {
+            self.smart_record_value(target, clip_name(&self.state, key, index), level);
+            return;
+        }
         let range = self.state.params.plugin(key).and_then(|p| p.lock().ok()?.param_info(index)).map(|i| (i.min, i.max));
         if let Some(range) = range {
             self.record_param(target, range, level);
@@ -1167,6 +1171,50 @@ mod tests {
         println!("{:?}", a.state.message);
     }
 
+
+    #[test]
+    fn smart_plugin_recording_does_not_also_write_pattern_controls() {
+        use crate::record::Opt;
+        use os_host::ParamEvent::Value;
+        let (mut app, key) = eq_app();
+        let desc = app.plugins.hosted[&key].plugin.lock().unwrap().desc().clone();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let plugin: Arc<Mutex<dyn os_host::Plugin>> = Arc::new(Mutex::new(CapturePlugin {
+            desc, events: events.clone(), value: 0.2,
+        }));
+        app.plugins.hosted.insert(key, crate::plugins::Hosted::new(plugin));
+        app.params_tick();
+        app.state.history.reset();
+        app.record_menu(0., 0.);
+        app.state.playlist.popup = None;
+        crate::playlist::run(&mut app, crate::playlist::Cmd::Record(Opt::Automation));
+        app.toggle_record();
+        app.transport.pretend_at(24., false);
+        events.lock().unwrap().push(Value(7, 0.7));
+        app.params_tick();
+        assert!(app.state.project.pattern(app.state.pattern).unwrap().controls.is_empty(),
+            "smart automation must not also create pattern control points");
+        assert_eq!(app.state.project.automations.len(), 1);
+        assert_eq!(app.state.project.automations[0].points.last().unwrap().value, 0.7);
+        assert_eq!(app.state.history.len(), 1, "only the automation clip owns the take's undo");
+        app.transport.pretend_at(48., false);
+        app.record_plugin_param(key, 0, 0.9);
+        assert_eq!(app.state.project.automations.len(), 1);
+        assert_eq!(app.state.project.automations[0].points.last().unwrap().value, 0.9,
+            "remote parameter edits continue the same smart take");
+        app.transport.stop();
+        app.record_tick();
+        crate::history::undo(&mut app.state);
+        assert!(app.state.project.automations.is_empty());
+        assert!(app.state.project.pattern(app.state.pattern).unwrap().controls.is_empty());
+        crate::mixer_recording::flag(Opt::Wait, true);
+        crate::mixer_recording::flag(Opt::WaitFilter, true);
+        app.state.rec.waiting = true;
+        app.record_plugin_param(key, 0, 0.4);
+        assert!(!app.state.rec.waiting && app.transport.playing(),
+            "remote plugin automation must release Start on input");
+        assert_eq!(app.state.project.automations.len(), 1);
+    }
 
     #[test]
     fn automation_capture_overlays_routed_clip_and_restores_deleted_instance() {

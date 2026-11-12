@@ -3032,8 +3032,8 @@ pub fn add_audio_clip_in(s: &mut State, path: &str, track: u16, tick: u32, mixer
     let mixer = mixer.or_else(|| crate::track_links::audio_mixer(s, track));
     let index = s.project.channels.iter().map(|c| c.index + 1).max().unwrap_or(0);
     let name = std::path::Path::new(path).file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Audio".into());
-    // New samples stay on Master until the user explicitly routes them.
-    let mixer_track = 0;
+    // New samples stay on Master unless recording or an audio track supplies a route.
+    let mixer_track = mixer.unwrap_or(0);
     s.project.channels.push(Channel {
         id: os_model::Id::NONE,
         index,
@@ -7318,21 +7318,25 @@ mod tests {
         app
     }
 
-    /// Rename... on an audio or automation clip renames its channel in the rack's name box; a pattern clip still edits
-    /// its pattern's name in place.
+    /// Audio clips have independent Playlist names; renaming one preserves the shared rack channel.
     #[test]
-    fn renaming_a_channel_clip_renames_its_channel() {
+    fn renaming_an_audio_clip_preserves_its_channel() {
         let mut app = app();
         let ch = app.state.project.channels[1].index;
+        let original = app.state.project.channels[1].name.clone();
         arr_mut(&mut app.state).clips.push(Clip::new(0, 96, 0, ClipSource::Channel(ch)));
         let i = clips(&app.state).len() - 1;
         assert_eq!(run(&mut app, Cmd::ClipRename(i)), None);
-        let b = app.state.pat_ui.name_box.as_mut().expect("the channel's name box opens");
-        assert_eq!(b.target, crate::patterns::BoxTarget::Rack(crate::rack::RBox::Channel(1)));
+        let b = app.state.pat_ui.name_box.as_mut().expect("the clip's name box opens");
+        assert_eq!(b.target, crate::patterns::BoxTarget::AudioClip(i));
         b.text = "Vocals".into();
         crate::patterns::accept(&mut app.state);
-        assert_eq!(app.state.project.channels[1].name.as_deref(), Some("Vocals"));
-        assert_eq!(source_name(&app.state, ClipSource::Channel(ch)), "Vocals");
+        assert_eq!(clips(&app.state)[i].name.as_deref(), Some("Vocals"));
+        assert_eq!(app.state.project.channels[1].name, original);
+        crate::history::undo(&mut app.state).unwrap();
+        assert_eq!(clips(&app.state)[i].name, None);
+        crate::history::redo(&mut app.state).unwrap();
+        assert_eq!(clips(&app.state)[i].name.as_deref(), Some("Vocals"));
     }
 
     /// TOOLS ▸ Lock / Unlock all tracks (AQUILA's design): a track whose clips share one source is locked to it
@@ -7488,7 +7492,7 @@ mod tests {
         app.state.selected_mixer = 5;
         // Replace ▸: the effects, into this slot.
         fn leaf(items: &[PItem]) -> Option<&PItem> {
-            items.iter().find_map(|i| if i.children.is_empty() { matches!(i.cmd, Cmd::SlotWin(..)).then_some(i) } else { leaf(&i.children) })
+            items.iter().find_map(|i| if i.children.is_empty() { matches!(i.cmd, Cmd::SlotWin(_, ref inner) if matches!(**inner, Cmd::Plugin(crate::plugin_menu::PlugCmd::Effect { .. }))).then_some(i) } else { leaf(&i.children) })
         }
         let replace = entry(&m, "Replace");
         assert!(replace.enabled && !replace.children.is_empty());

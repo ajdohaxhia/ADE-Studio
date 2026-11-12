@@ -59,13 +59,16 @@ impl App {
         if let Some((target,_,v))=self.automation_target(a){self.state.rec.smart.initial.entry(target).or_insert(v);}
     }
     pub(crate) fn smart_record_host(&mut self,a:&Action) {
-        if !self.smart_automation_live() && !self.state.params.capture_armed {return;}
         if let Some((target,name,v))=self.automation_target(a){
             if !self.capture_control(target,&name,v) {self.smart_record_value(target,name,v);}
         }
     }
     pub(crate) fn smart_record_value(&mut self,target:u32,name:String,value:f64) {
-        if !self.smart_automation_live() || !value.is_finite(){return;}
+        if !value.is_finite(){return;}
+        // Automation is also input for Start on input. Start playback before
+        // checking whether the smart recorder is live, just as the legacy writer does.
+        if Opt::Smart.on() {self.start_on_input(Opt::Automation);}
+        if !self.smart_automation_live(){return;}
         let tick=self.transport.tick().max(0.).round() as u32;
         let origin=self.state.rec.smart.origin.unwrap_or(self.state.playlist.pos).min(tick);
         let (ch,start)=match self.state.rec.smart.active.get(&target).copied() {
@@ -220,6 +223,9 @@ mod tests {
         let mut app=App::new(None);app.state.project=crate::app::test_project();
         crate::mixer_recording::flag(Opt::Smart,true);
         app.transport.pretend_at(0.,true);
+        // Opening ML Studio's filter menu initializes the notes-only automatic filter.
+        app.record_menu(0., 0.);
+        app.state.playlist.popup = None;
         crate::playlist::run(&mut app,crate::playlist::Cmd::Record(Opt::Automation));
         app.toggle_record();assert!(app.state.rec.armed&&app.state.playlist.popup.is_none());
         assert!(Opt::Notes.on()&&Opt::Automation.on()&&!Opt::Audio.on());
@@ -242,6 +248,9 @@ mod tests {
         app.state.rec.armed=false;app.transport.pretend_at(384.,true);
         let count=app.state.project.automations.len();app.smart_record_value(os_model::target::TEMPO,"Tempo".into(),0.5);
         assert_eq!(app.state.project.automations.len(),count,"Record off means no automatic capture");
+        assert_eq!(app.state.history.len(), 1, "one automation take is one undo step");
+        crate::history::undo(&mut app.state);
+        assert!(app.state.project.automations.is_empty(), "undo removes the whole automation take");
     }
     #[test]
     fn smart_mode_records_midi_notes_without_an_audio_input() {

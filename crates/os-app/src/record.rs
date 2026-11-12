@@ -451,7 +451,7 @@ impl App {
 
     /// Start on input: the first input that counts starts playback from the start (spec §3). `what` is what the input
     /// is (notes, automation); with Respect recording filter, the filter must record it.
-    fn start_on_input(&mut self, what: Opt) {
+    pub(crate) fn start_on_input(&mut self, what: Opt) {
         if self.state.rec.waiting && (!Opt::WaitFilter.on() || what.on()) {
             self.state.rec.waiting = false;
             self.start_playback();
@@ -541,6 +541,7 @@ impl App {
     /// knob, the tempo): while recording automation its value goes into the current pattern as a control point at the
     /// playback position, in the setting's own unit (spec §2 Taking automation).
     pub(crate) fn record_control(&mut self, a: &crate::app::Action) {
+        if Opt::Smart.on() { self.smart_record_host(a); return; }
         let Some((kind, value)) = point_of(&self.state, a) else { return };
         self.start_on_input(Opt::Automation);
         if self.rec_live(Opt::Automation) {
@@ -559,6 +560,9 @@ impl App {
 
     /// Writes a control point on target word `kind` at the playback position, replacing the move's earlier points.
     fn record_point(&mut self, kind: u32, value: i32) {
+        // Smart recording owns automation clips; the legacy writer must not also
+        // write the same edit into a pattern and create a second undo step.
+        if Opt::Smart.on() { return; }
         let song = self.transport.song();
         let t = self.transport.tick();
         self.open_take(song);
@@ -668,8 +672,14 @@ impl App {
         let lane = crate::smart_recording::instrument_lane(s)
             .filter(|(_, p)| *p == pattern).map(|(lane, _)| lane)
             .unwrap_or(s.playlist.track);
-        let earlier = crate::playlist::clips(s).iter()
-            .filter(|c| whole(c) && c.track == lane && c.position <= ti)
+        let end = (ti / bar + 1) * bar;
+        let clips = crate::playlist::clips(s);
+        let earlier = clips.iter()
+            .filter(|c| whole(c) && !c.muted && c.track == lane && c.position <= ti)
+            // Keep gaps in ML Studio's existing take, but never extend it over
+            // another clip. An occupied lane needs a new clip on a free row.
+            .filter(|c| !clips.iter().any(|other|
+                other.track == c.track && other.position < end && other.end() > c.end()))
             .max_by_key(|c| c.position).map(|c| (c.track, c.position));
         if let Some((track, at)) = earlier {
             let c = crate::playlist::arr_mut(s).clips.iter_mut()
@@ -681,8 +691,8 @@ impl App {
         }
         let at = ti / bar * bar;
         let len = crate::piano::pattern_length(s, pattern).max(bar);
-        let track = crate::smart_recording::instrument_lane(s).filter(|(_,p)|*p==pattern).map(|(t,_)|t)
-            .unwrap_or_else(||crate::playlist::free_track(s,0,at,at+len));
+        let lane = crate::smart_recording::instrument_lane(s).filter(|(_,p)|*p==pattern).map_or(0, |(t,_)|t);
+        let track = crate::playlist::free_track(s, lane, at, at + len);
         let clip = os_model::Clip::new(at, len, track, ClipSource::Pattern(pattern));
         crate::playlist::arr_mut(s).clips.push(clip);
         if let Some(k) = s.rec.take.as_mut() {
@@ -1204,15 +1214,18 @@ mod tests {
         assert_eq!(notes(&app), [(48, 48, 0), (bar + 48, 24, 0)]);
     }
 
-    /// SONG mode: a take starting less than a bar past a whole-pattern clip's bar line takes that clip and makes it
-    /// longer; further on, or with the track taken after the clip, a clip of its own is placed (spec §2 "right after a
-    /// clip", issue 192).
+    /// ML Studio keeps a later take on the current playlist lane in the same pattern,
+    /// extending its clip across a gap instead of making another pattern instance.
     #[test]
     fn takes_the_clip_just_before_in_song_mode() {
         let clips =
             |app: &App| -> Vec<(u16, u32, u32)> { crate::playlist::clips(&app.state).iter().map(|c| (c.track, c.position, c.length)).collect() };
-        let take = |other: bool, at: f64| {
+        let take = |other: bool, at: f64, assigned: bool| {
             let mut app = app();
+            if assigned {
+                let arr = crate::playlist::arr_mut(&mut app.state).number;
+                app.state.project.instrument_lanes = vec![(app.state.project.channels[0].index, arr, 0, 1)];
+            }
             crate::playlist::arr_mut(&mut app.state).clips.clear();
             crate::playlist::place(&mut app.state, 0, 0);
             let bar = app.state.project.bar_ticks();
@@ -1226,13 +1239,16 @@ mod tests {
             stop(&mut app);
             (app, bar)
         };
-        let (app, bar) = take(false, 400.0);
+        let (app, bar) = take(false, 400.0, false);
         assert_eq!(clips(&app), [(0, 0, 2 * bar)]);
         assert_eq!(notes(&app), [(408, 24, 0)]);
-        let (app, bar) = take(false, f64::from(2 * bar + 16));
-        assert_eq!(clips(&app), [(0, 0, bar), (0, 2 * bar, bar)]);
-        let (app, bar) = take(true, 400.0);
+        let (app, bar) = take(false, f64::from(2 * bar + 16), false);
+        assert_eq!(clips(&app), [(0, 0, 3 * bar)]);
+        let (app, bar) = take(true, 400.0, false);
         assert_eq!(clips(&app), [(0, 0, bar), (0, bar + bar / 2, bar), (1, bar, bar)]);
+        let (app, bar) = take(true, 400.0, true);
+        assert_eq!(clips(&app), [(0, 0, bar), (0, bar + bar / 2, bar), (1, bar, bar)],
+            "an assigned instrument lane must also avoid an occupied row");
     }
 
     /// SONG mode: a note held past the take's clip makes it longer while playback runs, so the written note ends inside
@@ -1443,6 +1459,9 @@ mod tests {
             app.state.project.mixer = (0..3).map(os_model::MixerTrack::new).collect();
         }
         app.toggle_record();
+        // Exercise the legacy pattern-control writer explicitly. The ML Studio toolbar
+        // normally selects smart recording, whose automation-clip undo is covered separately.
+        crate::mixer_recording::flag(Opt::Smart, false);
         app.transport.pretend_at(24.0, false);
         app.record_tick();
         let m = crate::mixer::track_mut(&mut app.state, 1).unwrap();
@@ -1510,7 +1529,7 @@ mod tests {
         app.mouse_up();
         let Some(Popup { items, .. }) = app.state.playlist.popup.take() else { panic!("no menu") };
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_ref()).collect();
-        assert!(labels.contains(&"Count-in length")&&labels.contains(&"1 bar")&&labels.contains(&"2 bars")&&labels.contains(&"Pre-roll (play before recording)"));
+        assert!(labels.contains(&"Precount duration")&&labels.contains(&"1 bar")&&labels.contains(&"2 bars")&&labels.contains(&"Pre-roll (play before recording)"));
         crate::playlist::run(&mut app, Cmd::RecPrecountBars(2));
         assert_eq!(precount_bars(), 2);
         let w = hit_rect(&app, &Action::RecOpt(Opt::Wait));

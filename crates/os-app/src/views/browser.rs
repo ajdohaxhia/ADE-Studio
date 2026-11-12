@@ -39,8 +39,8 @@ pub fn presets_key() -> String {
     format!("4:{PLUGIN_PRESETS}")
 }
 
-/// The "Current project" tree's sections, in screenshot order (spec §2), without the one nothing is tracked in yet
-/// (Remote control). History: the undo history (spec: ui/settings-choices.md "Undo history: the four checks
+/// The "Current project" tree's sections, in screenshot order (spec §2). History: the undo history (spec:
+/// ui/settings-choices.md "Undo history: the four checks
 /// (2026-10-16)"). Initialized controls: the project's initial values, shown only while there are some (spec:
 /// ui/settings-choices.md "Advanced: Initialize controls automatically"). Project data: the project's data folder, opened
 /// like a folder, shown only while the project has one (spec: ui/data-folder.md §3).
@@ -50,6 +50,7 @@ const PROJECT: &[(&str, Icon)] = &[
     ("Effects", Icon::Speaker),
     ("Generators", Icon::Plug),
     (INITIALIZED_CONTROLS, Icon::Slide),
+    (REMOTE_CONTROL, Icon::MidiControl),
     (PROJECT_DATA, Icon::Folder),
     ("Samples", Icon::Wave),
 ];
@@ -534,6 +535,11 @@ fn project_rows(s: &State, root: &str, cat: u8, out: &mut Vec<Row>) {
             INITIALIZED_CONTROLS => {
                 for c in &p.init_controls {
                     leaf(out, &parent, crate::init::name(s, c.target), Icon::Slide, cat, false, Item::None);
+                }
+            }
+            REMOTE_CONTROL => {
+                for link in crate::remote::links() {
+                    leaf(out, &parent, crate::remote::label(s, &link), Icon::MidiControl, cat, false, Item::None);
                 }
             }
             "Samples" => {
