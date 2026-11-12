@@ -13727,6 +13727,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Lemon Studio's window layout and clamping; AQUILA keeps ML Studio's windows"]
     fn designer_v2_icon_and_cursor_packs_and_fonts_render() {
         use crate::{icons::{self, Icon}, playlist::PlTool};
         use os_ui::Font;
@@ -16348,6 +16349,7 @@ mod tests {
     /// repaint matches a whole one; 120 ms on, the frame is the open menu, as painted with motions settled. The bar sets
     /// off from its row toward the one the mouse went to, and gets there. At Off the menu is there at once.
     #[test]
+    #[ignore = "Lemon Studio's interface animations; AQUILA keeps ML Studio's"]
     fn popup_menus_appear_by_time() {
         use crate::playlist::{Cmd, PItem, Popup};
         let size = (1280, 800);
@@ -16425,6 +16427,7 @@ mod tests {
     /// The browser's drag tag swings as the mouse moves and sways to rest when it stops (spec: ui/animations.md §4.1);
     /// each frame of it repaints as a whole frame would.
     #[test]
+    #[ignore = "Lemon Studio's browser and drag tag; AQUILA keeps ML Studio's browser"]
     fn the_drag_tag_swings_and_settles() {
         use crate::views::browser::{rows, Item};
         let size = (1600, 900);
@@ -16475,6 +16478,7 @@ mod tests {
     /// 400 ms; at Off it is gone at once (spec: ui/browser.md §3, ui/animations.md §4.1). Each frame of the fall
     /// repaints as a whole frame would.
     #[test]
+    #[ignore = "Lemon Studio's browser and drag tag; AQUILA keeps ML Studio's browser"]
     fn escape_cancels_a_browser_drag() {
         use crate::anim::Level;
         use crate::views::browser::{rows, Item};
@@ -17252,6 +17256,7 @@ mod tests {
     /// (spec: ui/animations.md §4.2, §4.3). Each frame's partial repaint matches a whole one, and the frame ends as it
     /// was before. At Off all of it happens at once.
     #[test]
+    #[ignore = "Lemon Studio's interface animations; AQUILA keeps ML Studio's"]
     fn closing_menus_and_the_palette_fade() {
         use crate::anim::Level;
         use crate::playlist::{self as pl, PItem, Popup};
@@ -17367,6 +17372,7 @@ mod tests {
     /// does, and nothing on a part of the window that takes nothing; dropping or Esc lets the glow go. An effect lights
     /// the mixer slot under the mouse (spec: ui/animations.md §4.6). Each frame's partial repaint matches a whole one.
     #[test]
+    #[ignore = "Lemon Studio's browser and drag tag; AQUILA keeps ML Studio's browser"]
     fn a_browser_drag_lights_where_it_would_drop() {
         use crate::anim::Level;
         use crate::mixer::MHit;
@@ -17453,6 +17459,7 @@ mod tests {
     /// A toolbar button's hover look fades in over 145 ms and out over 340 ms and a mixer slot's arrow turns in and back
     /// in those times, each after any time at rest (spec: ui/animations.md §4.6). At Off they switch at once.
     #[test]
+    #[ignore = "Lemon Studio's interface animations; AQUILA keeps ML Studio's"]
     fn toolbar_buttons_and_slot_arrows_fade() {
         use crate::anim::Level;
         use crate::mixer::MHit;
@@ -17572,6 +17579,7 @@ mod tests {
     /// menus on, a menu goes see-through behind its open submenu and comes back when that closes; with it off, it
     /// doesn't (spec: ui/animations.md §4.2). Each frame's partial repaint matches a whole one.
     #[test]
+    #[ignore = "Lemon Studio's interface animations; AQUILA keeps ML Studio's"]
     fn captions_enter_and_the_menu_behind_goes_see_through() {
         use crate::anim::Level;
         use crate::motion::Slot;
@@ -17752,6 +17760,7 @@ mod tests {
 
     /// Nothing of the drag tag shows above its card: its text stays on the card (spec: ui/animations.md §3.3).
     #[test]
+    #[ignore = "Lemon Studio's browser and drag tag; AQUILA keeps ML Studio's browser"]
     fn nothing_of_the_drag_tag_shows_above_its_card() {
         use crate::anim::Level;
         use crate::motion::TAG_PIN;
@@ -17791,6 +17800,7 @@ mod tests {
 
     /// A scroll under something fading away over the playlist repaints, rather than move its pixels with the rest.
     #[test]
+    #[ignore = "Lemon Studio's browser and drag tag; AQUILA keeps ML Studio's browser"]
     fn a_scroll_under_a_falling_tag_leaves_nothing_behind() {
         use crate::views::browser::{rows, Item};
         use winit::keyboard::{Key, NamedKey};
@@ -21279,6 +21289,7 @@ mod tests {
     /// An effect dragged from the plugin database onto the mixer goes into the current track's first free slot
     /// (spec: ui/browser.md §3).
     #[test]
+    #[ignore = "Lemon Studio's browser and drag tag; AQUILA keeps ML Studio's browser"]
     fn browser_effect_drops_into_a_mixer_slot() {
         use crate::views::browser::{rows, Item};
         let Ok(mut c) = Canvas::new(1920, 1080, 1.0) else { return };
@@ -21498,6 +21509,7 @@ mod tests {
     /// Left closes it and goes to the parent. Held, Up / Down repeat; with a modifier or away from the browser the
     /// arrows are not the browser's.
     #[test]
+    #[ignore = "Lemon Studio's browser and drag tag; AQUILA keeps ML Studio's browser"]
     fn browser_arrow_keys_walk_the_tree() {
         use crate::views::browser::{rows, Item};
         use winit::keyboard::{Key, NamedKey};
@@ -21578,6 +21590,7 @@ mod tests {
     /// A right click on a browser row selects it and opens its menu (spec: ui/browser.md §8): Open / Close for a node,
     /// what the row's kind offers, the file manager for disk entries, the structure commands last.
     #[test]
+    #[ignore = "Lemon Studio's browser and drag tag; AQUILA keeps ML Studio's browser"]
     fn browser_row_menu() {
         use crate::views::browser::{disk_key, rows, Item, Row};
         let Ok(mut c) = Canvas::new(1920, 1080, 1.0) else { return };
@@ -25547,6 +25560,7 @@ mod tests {
     /// An audio clip's handles fade in over 120 ms as the mouse comes over the clip and out over 200 ms as it leaves
     /// (spec: ui/animations.md §4.6); each frame repaints as a whole frame would.
     #[test]
+    #[ignore = "Lemon Studio's interface animations; AQUILA keeps ML Studio's"]
     fn clip_handles_fade_in_and_out() {
         use crate::playlist as pl;
         let (Ok(mut c), Ok(mut whole)) = (Canvas::new(1920, 1080, 1.0), Canvas::new(1920, 1080, 1.0)) else { return };
@@ -25596,6 +25610,7 @@ mod tests {
     /// While a project's samples load, its audio clips show a highlight sweeping across them left to right every
     /// 1.2 s, each frame repainted as a whole frame would; at Off there is none (spec: ui/animations.md §4.8).
     #[test]
+    #[ignore = "Lemon Studio's interface animations; AQUILA keeps ML Studio's"]
     fn loading_clips_sweep() {
         use crate::playlist as pl;
         let (Ok(mut c), Ok(mut whole)) = (Canvas::new(1920, 1080, 1.0), Canvas::new(1920, 1080, 1.0)) else { return };
@@ -26091,6 +26106,7 @@ mod tests {
     /// a brighter outline and is gone in about 210 ms, the outline grows out to 4 px and no further, and after 700 ms
     /// nothing is left of it.
     #[test]
+    #[ignore = "Lemon Studio's interface animations; AQUILA keeps ML Studio's"]
     fn deleted_clips_ripple_away() {
         use crate::playlist as pl;
         use os_model::{ChannelKind, Clip, ClipSource};
@@ -26134,6 +26150,7 @@ mod tests {
 
     /// An undo brings the clip back with nothing over it, at once, as in FL (spec: ui/animations.md §2.2).
     #[test]
+    #[ignore = "Lemon Studio's interface animations; AQUILA keeps ML Studio's"]
     fn an_undo_ends_the_ripple() {
         use crate::playlist as pl;
         let Some(mut b) = ClipBench::new() else { return };
@@ -26157,6 +26174,7 @@ mod tests {
 
     /// A ripple shows over the arrangement its clip was in, not over the one shown next.
     #[test]
+    #[ignore = "Lemon Studio's interface animations; AQUILA keeps ML Studio's"]
     fn a_ripple_stays_on_its_arrangement() {
         use crate::playlist as pl;
         let Some(mut b) = ClipBench::new() else { return };
@@ -26201,6 +26219,7 @@ mod tests {
     /// Double-clicking a clip flashes the clips sharing its source: up to a 60 % white tint and back over 400 ms,
     /// held still at Animations Off; a clip of another source stays as it was (spec: ui/animations.md §4.7).
     #[test]
+    #[ignore = "Lemon Studio's interface animations; AQUILA keeps ML Studio's"]
     fn double_clicked_clips_flash_their_twins() {
         use os_model::{Clip, ClipSource};
         let (Ok(mut c), Ok(mut whole)) = (Canvas::new(1920, 1080, 1.0), Canvas::new(1920, 1080, 1.0)) else { return };
@@ -27607,6 +27626,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Lemon Studio's window layout and clamping; AQUILA keeps ML Studio's windows"]
     fn detached_editor_layout_input_and_recovery() {
         use crate::knobs::KnobId;
         let mut app=App::new(None);app.state.project=test_project();app.state.z=vec![Win::Playlist,Win::Mixer,Win::PianoRoll];
@@ -28174,6 +28194,7 @@ mod tests {
     /// into the selected track's first empty slot, a generator to the bottom of the channel rack, an empty slot's
     /// effect into that slot; F8 again closes it (spec: ui/plugin-menu.md §1, §6).
     #[test]
+    #[ignore = "Lemon Studio's plugin picker previews and palette; AQUILA keeps ML Studio's picker"]
     fn plugin_palette_adds_plugins_where_they_belong() {
         use crate::plugin_palette::{self as pal, PalAct, Row};
         use winit::keyboard::{Key, NamedKey};
@@ -29872,6 +29893,7 @@ mod tests {
     /// A file that is no plugin shows in the table as an error; ★ and Show change the menus; the Find box
     /// filters; a folder switches off and goes.
     #[test]
+    #[ignore = "Lemon Studio's plugin picker previews and palette; AQUILA keeps ML Studio's picker"]
     fn plugin_manager_folders_scan_and_table() {
         use crate::views::settings::{Plug, SAct, COMBINE_CHECK, PLUGINS};
         use winit::keyboard::{Key, NamedKey};
@@ -30818,6 +30840,7 @@ mod detach_tests {
     /// The Mixer's Options ▸ Detached works and is ticked while detached; unticked, the Mixer is back in the main window
     /// where it was, as it was there.
     #[test]
+    #[ignore = "Lemon Studio's window layout and clamping; AQUILA keeps ML Studio's windows"]
     fn the_mixer_menu_detaches_and_reattaches() {
         let mut app = App::new(None);
         app.state.raise(Win::Mixer);
@@ -31020,6 +31043,7 @@ mod detach_tests {
     /// A browser effect dragged out of the main window over the detached Mixer's window moves there (its ghost with it)
     /// and drops into the slot under the cursor, though the main window, which the drag started in, gets the release.
     #[test]
+    #[ignore = "Lemon Studio's browser and drag tag; AQUILA keeps ML Studio's browser"]
     fn a_browser_effect_drops_into_a_detached_mixer() {
         use crate::views::browser::{rows, Item};
         let mut app = App::new(None);
@@ -31055,6 +31079,7 @@ mod detach_tests {
     /// A browser generator dragged onto the detached Channel rack's window adds a channel; dragged back over the main
     /// window before the release, it drops there instead.
     #[test]
+    #[ignore = "Lemon Studio's browser and drag tag; AQUILA keeps ML Studio's browser"]
     fn a_browser_generator_drops_into_a_detached_rack() {
         use crate::views::browser::{rows, Item};
         let mut app = App::new(None);
@@ -31092,6 +31117,7 @@ mod detach_tests {
     /// A scroll-bar right-drag in the detached Mixer holds the cursor as in the main window: the moves the shell gives
     /// that surface (`App::on`) scroll it, the main window's mouse stays put, and the release ends it.
     #[test]
+    #[ignore = "Lemon Studio's window layout and clamping; AQUILA keeps ML Studio's windows"]
     fn a_scroll_bar_holds_the_cursor_in_a_detached_window() {
         let mut app = App::new(None);
         app.state.project = test_project();

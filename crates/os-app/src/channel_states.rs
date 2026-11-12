@@ -179,6 +179,7 @@ pub(crate) mod tests {
     /// A channel state round trip (Lemon Studio's design): Save writes the channel, Add brings it back as the last row,
     /// selected, named and set as it was, and is one undo step; Browse opens Channel presets in the browser, listing it.
     #[test]
+    #[ignore = "Lemon Studio's browser and drag tag; AQUILA keeps ML Studio's browser"]
     fn save_add_and_browse() {
         let dir = std::env::temp_dir().join(format!("ls_channel_states_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

@@ -482,6 +482,7 @@ mod tests {
     /// The browser lists the controls under Current project ▸ Initialized controls ("<owner> - <setting>"), a folder
     /// shown only while there are some.
     #[test]
+    #[ignore = "Lemon Studio's browser and drag tag; AQUILA keeps ML Studio's browser"]
     fn browser_lists_the_initialized_controls() {
         use crate::views::browser::{rows, INITIALIZED_CONTROLS};
         let mut a = app();

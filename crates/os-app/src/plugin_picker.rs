@@ -521,6 +521,7 @@ mod tests{
         a.key(&Key::Named(NamedKey::Escape),false,false);assert!(!a.state.plugin_picker.open);
     }
     #[test]
+    #[ignore = "Lemon Studio's plugin picker previews and palette; AQUILA keeps ML Studio's picker"]
     fn plugin_picker_artwork_and_context_fill_the_view(){
         let mut a=app();let mut c=Canvas::new(1280,900,1.).unwrap();a.paint(&mut c,None);
         open(&mut a,Target::All);
