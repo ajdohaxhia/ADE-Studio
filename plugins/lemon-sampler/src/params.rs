@@ -370,7 +370,7 @@ impl EnvParams {
                 | flag(self.lfo_tempo.live(), Record::LFO_FOLLOWS_TEMPO)
                 | flag(which == Record::VOLUME, Record::ONE_WHILE_OFF)
                 | flag(self.lfo_global.live(), Record::GLOBAL_LFO),
-            on: true,
+            on: self.on.live(),
             delay: time_field(self.delay.live()),
             attack: time_field(self.att.live()),
             hold: time_field(self.hold.live()),

@@ -63,7 +63,9 @@ const PLUGIN_PAGES: [(&str, &str); 28] = [
 /// A plugin menu's Help for Lemon Studio's own plugin `name`: its page in the wiki, or the wiki's overview of them if
 /// it has none.
 pub fn plugin_page(name: &str) -> String {
-    match PLUGIN_PAGES.iter().find(|&&(plugin, _)| plugin == name) {
+    // ML Studio renamed most built-in plugins from "Lemon X" to "ML X"; their pages keep the Lemon Studio names.
+    let lemon = name.strip_prefix("ML ").map(|rest| format!("Lemon {rest}"));
+    match PLUGIN_PAGES.iter().find(|&&(plugin, _)| plugin == name || lemon.as_deref() == Some(plugin)) {
         Some((_, page)) => format!("{PLUGINS_URL}{page}/"),
         None => PLUGINS_URL.to_owned(),
     }

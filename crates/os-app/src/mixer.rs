@@ -1986,10 +1986,8 @@ fn renumber(s: &mut State, m: &dyn Fn(u16) -> u16, from: u16, to: u16, removed: 
             SlotParam(n,k,p)=>t::slot_param(m(n),k,p),_=>id,
         }
     };
-    for a in &mut s.project.automations {for t in &mut a.targets {*t=retarget(*t);}}
-    for c in &mut s.project.init_controls {c.target=retarget(c.target);}
+    // Automations, pattern controls and init controls follow in `follow_places` below; peak links are the fork's own.
     for l in &mut s.project.peak_links {l.source=m(l.source);l.target=retarget(l.target);}
-    for p in &mut s.project.patterns {for c in &mut p.controls {c.kind=retarget(c.kind);}}
     let old: Vec<MixerTrack> = s.project.mixer.clone();
     for t in &old {
         if t.index >= from && t.index < to {
@@ -2326,13 +2324,52 @@ fn track_items(s: &State, n: u16) -> Vec<PItem> {
     items.extend([
         PItem::new("Save effect chain…", mx(MCmd::SaveEffectChain(n))),
         PItem::sub("Change color...", colors),
-        PItem::not_yet("Change icon..."),
+        PItem::new("Rename, color and icon...", mx(MCmd::Rename(n))).key("F2"),
+        PItem::new("Random color", mx(MCmd::RandomColor(n))),
+        if is_selected(s, n) && selected(s).len() > 1 { PItem::new("Gradient color...", mx(MCmd::GradientColor)) } else { PItem::not_yet("Gradient color...") },
+        PItem::sub("Change icon...", crate::playlist::icon_items(s, crate::playlist::TRACK_ICON_KEY + usize::from(n))),
+        {
+            let tg = targets(s, n);
+            let it = PItem::new("Assign to new Audio track(s)", mx(MCmd::AssignAudio(n)));
+            if crate::track_links::can_assign_audio(s, &tg) { it } else { it.off() }
+        },
+        {
+            let tg = targets(s, n);
+            let it = PItem::new("Unassign from Audio track(s)", mx(MCmd::UnassignAudio(n)));
+            if crate::track_links::can_unassign_audio(s, &tg) { it } else { it.off() }
+        },
         PItem::sep(),
         PItem::new(if targets(s,n).len()>1{"Solo selected tracks"}else{"Solo"},mx(MCmd::Solo(n))),
         PItem::new("Reset selected track(s) to default", mx(MCmd::Reset(n))),
         PItem::new("Reset selected track(s) routing", mx(MCmd::ResetRouting(n))),
         PItem::sep(),
-        PItem::new("Separator", mx(MCmd::Separator(n))).mark(Mark::Check(has_separator(s, n))),
+        PItem::new("Alt solo selected track(s)", mx(MCmd::AltSolo(n))).key("Alt+S"),
+        PItem::new("Unroute tracks routed to the selected track(s)", mx(MCmd::UnrouteTo(n))),
+        PItem::sub(
+            "Channel routing",
+            vec![
+                PItem::new("Route selected channels to this track", mx(MCmd::RouteChannels { dst: n, spread: false })).key("Ctrl+L"),
+                PItem::new("Route selected channels starting from this track", mx(MCmd::RouteChannels { dst: n, spread: true })).key("Shift+Ctrl+L"),
+            ],
+        ),
+        track_routing(s, n),
+        PItem::sub(
+            "Select",
+            vec![
+                PItem::new("Channels routed to this track", mx(MCmd::SelectChannels(n))).key("Alt+L"),
+                PItem::new("Channels and playlist tracks routed to this track", mx(MCmd::SelectChannelsTracks(n))),
+                PItem::sep(),
+                PItem::new("Tracks this one is routed to", mx(MCmd::SelectDest(n))),
+                PItem::new("Tracks routed to this one", mx(MCmd::SelectSources(n))).key("Ctrl+Alt+L"),
+                PItem::sep(),
+                in_group(PItem::new("Group", mx(MCmd::SelectGroup(n)))),
+                PItem::new("All", mx(MCmd::SelectAll)).key("Ctrl+A"),
+            ],
+        ),
+        PItem::sep(),
+        insert_only(n, PItem::new("Separator", mx(MCmd::Separator(n))).mark(Mark::Check(has_separator(s, n)))),
+        insert_only(n, PItem::new("Create group...", mx(MCmd::CreateGroup(n)))),
+        in_group(PItem::new("Auto color group", mx(MCmd::AutoColorGroup(n)))),
         PItem::sub("Channel Strip mixer",crate::rack_mixer::menu(s,n)),
         PItem::sub("Channel layout",["Standard (FL-style)","Custom strip","Vox (Custom + DS)"].iter().enumerate().map(|(i,label)| {
             let item=PItem::new(*label,mx(MCmd::ChannelLayout(n,i as u8))).mark(Mark::Radio(track(s,n).is_some_and(|m|m.channel_layout==i as u8)));
@@ -2340,7 +2377,25 @@ fn track_items(s: &State, n: u16) -> Vec<PItem> {
         }).collect()),
         PItem::sub("Dock to", vec![PItem::not_yet("Left"), PItem::not_yet("Middle"), PItem::not_yet("Right")]),
         PItem::sep(),
-        PItem::sub("File", vec![PItem::new("Render to wave file...", mx(MCmd::RenderWave(n)))]),
+        PItem::new("Move left", mx(MCmd::MoveLeft(n))).key("Alt+Left"),
+        PItem::new("Move right", mx(MCmd::MoveRight(n))).key("Alt+Right"),
+        PItem::new("Delete", mx(MCmd::Delete(n))).key("Del"),
+        PItem::new("Insert one", mx(MCmd::InsertOne(n))),
+        PItem::new("Insert multiple...", mx(MCmd::InsertMultiple(n))),
+        PItem::sub("Insert from state", state_items(|p| mx(MCmd::InsertState(n, p)))),
+        PItem::sep(),
+        PItem::sub(
+            "File",
+            vec![
+                PItem::sub("Open mixer track state", state_items(|p| mx(MCmd::OpenState(n, p)))),
+                PItem::new("Save mixer track state", mx(MCmd::SaveState(n))),
+                PItem::sep(),
+                PItem::new("Render to wave file...", mx(MCmd::RenderWave(n))),
+            ],
+        ),
+        PItem::new("Open audio editor", mx(MCmd::AudioEditor(n))).key("Ctrl+E"),
+        PItem::new("Open audio editor and record", mx(MCmd::AudioEditorRecord(n))).key("Shift+E"),
+        PItem::not_yet("Compensate for master latency").mark(Mark::Check(false)),
         PItem::new("Allow threaded processing", mx(MCmd::Threaded(n))).mark(Mark::Check(track(s, n).is_none_or(|m| m.threaded))),
     ]);
     items
@@ -4488,18 +4543,14 @@ mod tests {
         assert_eq!((it.enabled, it.cmd), (true, Cmd::Mixer(MCmd::InsertMultiple(3))));
         track_mut(&mut a.state, 3).unwrap().name = Some("Three".into());
         a.state.project.channels[0].mixer_track = 3;
-        run(&mut a, MCmd::InsertMultiple(3));
-        let e = a.state.playlist.edit.clone().expect("the box");
-        assert_eq!((e.target, e.text.as_str(), e.sel), (EditTarget::MixerInsert(3), "2", true));
-        a.state.playlist.edit.as_mut().unwrap().text = "3".into();
+        // AQUILA asks in the insert-tracks form (ML Studio's design) rather than an inline box.
         let steps = a.state.history.at();
-        crate::playlist::commit_edit(&mut a.state);
+        confirm_insert_tracks(&mut a, 3, 3);
         assert_eq!(a.state.project.mixer.len(), len + 3);
-        assert_eq!(name(&a.state, 6), "Three");
-        assert_eq!(a.state.project.channels[0].mixer_track, 6, "channels follow their track");
-        assert_eq!((name(&a.state, 3), a.state.selected_mixer), ("Bus 3".to_string(), 3));
-        assert_eq!(a.state.message.as_deref(), Some("Inserted 3 mixer tracks"));
-        assert_eq!((a.state.history.at(), a.state.history.newest_done()), (steps + 1, Some(INSERT)));
+        // ML Studio's form inserts after the track, so it and its channels stay put.
+        assert_eq!(name(&a.state, 3), "Three");
+        assert_eq!(a.state.project.channels[0].mixer_track, 3, "channels keep their track");
+        assert_eq!(a.state.history.at(), steps + 1, "one undo step");
         crate::history::undo(&mut a.state);
         assert_eq!((a.state.project.mixer.len(), name(&a.state, 3)), (len, "Three".to_string()));
         assert_eq!(insert_many(&mut a.state, 3, "lots").as_deref(), Some("Insert multiple: \"lots\" is not a number"));

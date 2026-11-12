@@ -349,6 +349,8 @@ struct Voice {
     note_pan: f64,
     mod_x: f32,
     mod_y: f32,
+    /// ML Studio's per-note drive (0..1, poly modulation 7): a hard clip after up to 16x gain, before the filter.
+    drive: f32,
     /// Samples played.
     age: u64,
     /// The note has ended.
@@ -892,6 +894,7 @@ impl Engine {
             note_pan: 0.0,
             mod_x: 0.0,
             mod_y: 0.0,
+            drive: 0.0,
             age: 0,
             released: false,
             open,
@@ -990,10 +993,14 @@ impl Engine {
         }
     }
 
+    /// ML Studio's per-note drive (poly modulation 7) for the voices of note `id`.
+    pub fn note_drive(&mut self, id: i32, amount: f32) {
+        for v in self.voices.iter_mut().filter(|v| v.id == Some(id)) {
+            v.drive = amount.clamp(0.0, 1.0);
+        }
+    }
+
     /// The note's filter offsets in knob units (per-note modulation of MOD X / MOD Y), also while it sounds.
-    /// AQUILA's per-note drive (poly modulation 7): Lemon Sampler's voices have no drive stage, so it is taken and
-    /// ignored.
-    pub fn note_drive(&mut self, _id: i32, _amount: f32) {}
 
     pub fn modulate(&mut self, id: i32, mod_x: Option<f32>, mod_y: Option<f32>) {
         for v in self.voices.iter_mut().filter(|v| v.id == Some(id)) {
@@ -1320,6 +1327,11 @@ fn render_voice(v: &mut Voice, mut rt: Option<&mut Rt>, src: &Src, b: &Block, cx
                 }
             },
         };
+        if v.drive > 0.0 {
+            let gain = 1.0 + 15.0 * v.drive;
+            l = (l * gain).clamp(-1.0, 1.0);
+            r = (r * gain).clamp(-1.0, 1.0);
+        }
         l = v.filt.run(0, k as usize, l);
         r = v.filt.run(1, k as usize, r);
         // The fades act on the signal before the gains (spec: audio/declick.md "Where the fades sit"). FL works on a

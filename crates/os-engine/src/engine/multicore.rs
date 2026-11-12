@@ -648,6 +648,9 @@ pub(super) struct InstOut {
     pub quiet: super::auto_bypass::Quiet,
     /// The gains its output ended the last tick on.
     pub gain: Option<(f32, f32)>,
+    /// Its extra output ports this tick (ML Chop's pads), interleaved and at the channel's gain: port `p` plays into
+    /// the mixer track `p + 1` after the channel's own. An empty one put out nothing.
+    pub aux: Vec<Vec<f32>>,
 }
 
 /// The audio clips with shapes on instrument channels (`Engine::inst_shapes`), shared by the channels of a tick: each

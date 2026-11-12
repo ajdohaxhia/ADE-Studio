@@ -895,7 +895,7 @@ mod tests {
     fn per_note_drive_only_clips_the_target_hit(){
         let event=|voice_id|NoteEvent::PolyModulation{timing:0,voice_id,poly_modulation_id:7,normalized_offset:0.8};
         let clean=level(880.,&[]);assert_eq!(level(880.,&[event(4)]),clean);
-        assert!(level(880.,&[event(3)]).0>clean.0*1.5);
+        let driven=level(880.,&[event(3)]);assert!(driven.0>clean.0*1.5,"{driven:?} {clean:?}");
     }
     #[test]
     fn a_note_pan_reaches_its_voice() {

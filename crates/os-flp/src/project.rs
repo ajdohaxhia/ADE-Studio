@@ -2332,7 +2332,7 @@ fn load_mixer(events: &[Event], l: &Layout, enc: TextEnc) -> Vec<MixerTrack> {
         let to = starts.get(n + 1).copied().or(l.mixer_params).unwrap_or(events.len());
         let mut slots: [Option<SlotPlugin>; 64] = std::array::from_fn(|_|None);
         let mut pending_plugin: Option<SlotPlugin> = None;
-        let mut slot_cpu = [os_model::PluginCpu::default(); 10];
+        let mut slot_cpu = [os_model::PluginCpu::default(); 64];
         let mut pending_cpu = None;
         let mut routes = Vec::new();
         for e in &events[from..to] {

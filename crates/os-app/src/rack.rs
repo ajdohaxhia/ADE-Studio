@@ -2044,6 +2044,7 @@ pub(crate) fn default_options_menu(s: &State, x: f32, y: f32) -> Popup {
             PItem::sub(crate::views::menus::CLIPS_ALL_LABEL,stretch_items(true)),
             PItem::sub(crate::views::menus::CLIPS_SEL_LABEL,stretch_items(false)),
         ]),
+        PItem::new(crate::mixer::AUTO_BYPASS_ALL_LABEL, Cmd::Mixer(crate::mixer::MCmd::AutoBypassAll)),
         PItem::sep(),
         PItem::sub("View",vec![
             off(it("Zip selected",RCmd::ZipSel).key("Alt+Z"),none),

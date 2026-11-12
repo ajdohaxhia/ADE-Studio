@@ -1615,7 +1615,8 @@ pub struct MixerTrack {
     pub rec_source: u8,
     pub monitor: u8,
     /// Per slot: the slot plugin's CPU switches (event 212 flags; they follow the plugin when it moves).
-    pub slot_cpu: [PluginCpu; 10],
+    #[serde(with = "collab_array")]
+    pub slot_cpu: [PluginCpu; 64],
     /// Armed for disk recording (the strip's record button). Not saved, and not part of the track: tracks that differ
     /// only here are equal (spec: audio/track-io.md §1.5).
     pub armed: bool,
@@ -1786,7 +1787,7 @@ impl MixerTrack {
             audio_out: if index == 0 { 0 } else { -1 },
             rec_source: REC_POST_EQ,
             monitor: MONITOR_ARMED,
-            slot_cpu: [PluginCpu::default(); 10],
+            slot_cpu: [PluginCpu::default(); 64],
             armed: false,
             origin: None,
         }

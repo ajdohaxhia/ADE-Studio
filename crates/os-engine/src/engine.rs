@@ -816,7 +816,7 @@ struct MixTrack {
     slot_on: [bool; 64],
     slot_mix: [i32; 64],
     /// Auto-bypass when silent, by slot (`auto_bypass`), for hosted effects attached later.
-    slot_smart: [bool; 10],
+    slot_smart: [bool; 64],
     /// Largest |sample| per side after the fader since the meters last read them.
     peak: [f32; 2],
     vu: crate::vu::Vu,
@@ -999,7 +999,7 @@ impl MixTrack {
             effects: Vec::new(),
             slot_on: [true; 64],
             slot_mix: [12800; 64],
-            slot_smart: [false; 10],
+            slot_smart: [false; 64],
             peak: [0.0; 2],
             vu: crate::vu::Vu::default(),
             matrix: unity,
@@ -2871,6 +2871,63 @@ impl Engine {
         self.inst_offs.retain(|o| o.1 < n);
         self.inst_shapes = std::mem::take(&mut old.inst_shapes);
         self.inst_shapes.retain(|s| s.channel < n);
+        // ML Studio: playlist audio clips are matched by identity, so a trim, a fade or a gain change keeps the voice
+        // playing in place; upstream's handling below then covers notes and hosted instruments.
+        // Reconcile only Playlist audio voices. Keep their sample position and voice ID on
+        // gain/fade edits; stop muted/removed clips and start newly audible clips in place.
+        let mut active = self.clips_under_way(tick);
+        let previous = old.clips_under_way(tick);
+        let take = |active: &mut Vec<Trigger>, channel, origin: Option<ClipOrigin>| {
+            let exact = active.iter().position(|t| t.channel == channel && t.clip_origin == origin);
+            // A trim changes the clip's bounds, but not the source frame audible now.
+            // Match that frame (within rounding to one sample) so dragging either edge
+            // keeps the existing voice, phase and envelopes instead of retriggering it.
+            let trimmed = || {
+                let before = previous.iter().find(|t| t.channel == channel && t.clip_origin == origin)?;
+                active.iter().position(|t| t.channel == channel
+                    && t.clip_origin.map(|o| o.0) == origin.map(|o| o.0)
+                    && t.rate == before.rate && (t.from - before.from).abs() <= 1.0)
+            };
+            exact.or_else(trimmed).map(|i| active.remove(i))
+        };
+        for v in &mut self.voices {
+            if v.clip_origin.is_none() { continue; }
+            if let Some(t) = take(&mut active, v.channel, v.clip_origin) {
+                if let (Some(shape), Some(new)) = (v.shape.as_mut(), t.shape) {
+                    *shape = if v.clip_origin == t.clip_origin {
+                        ClipShape { since: shape.since, age_origin: shape.age_origin, declick: shape.declick, ..new }
+                    } else { ClipShape { age_origin: v.age, declick: 0, ..new } };
+                }
+                v.clip_origin = t.clip_origin;
+                v.cut = t.cut;
+            } else { v.cut = Some(tick); v.clip_origin = None; }
+        }
+        for v in &mut self.inst_shapes {
+            if v.clip_origin.is_none() { continue; }
+            if !self.inst_offs.iter().any(|o| o.1 == v.channel && o.3 == Some(v.voice) && o.0 > tick) {
+                v.clip_origin = None;
+                continue;
+            }
+            if let Some(t) = take(&mut active, v.channel, v.clip_origin) {
+                if let Some(new) = t.shape {
+                    v.shape = if v.clip_origin == t.clip_origin {
+                        ClipShape { since: v.shape.since, age_origin: v.shape.age_origin, declick: v.shape.declick, ..new }
+                    } else { ClipShape { age_origin: v.age, declick: 0, ..new } };
+                }
+                v.clip_origin = t.clip_origin;
+                for off in &mut self.inst_offs {
+                    if off.1 == v.channel && off.3 == Some(v.voice) { off.0 = t.cut.unwrap_or(off.0); }
+                }
+            } else {
+                v.clip_origin = None;
+                v.shape.gain = 0.0;
+                for off in &mut self.inst_offs {
+                    if off.1 == v.channel && off.3 == Some(v.voice) { off.0 = tick; }
+                }
+            }
+        }
+        self.late.retain(|t| t.clip_origin.is_none());
+        self.late.extend(active);
         // An edit while the song plays (spec: audio/transport.md "Edits while playing"): an audio clip still sounding
         // from a clip the new project no longer has where it was (deleted or moved) ends now, faded out as a live note
         // is; a hosted instrument's note or audio clip that the new project no longer has gets its note off or its
@@ -2878,18 +2935,18 @@ impl Engine {
         // there (added or moved) that is under way starts at once, inside the clip as playback started there would.
         if !self.live_only {
             let before: std::collections::HashSet<Origin> = old.triggers.iter().chain(&self.late).map(Trigger::origin).collect();
-            let new: Vec<Trigger> = self.clips_under_way(tick).into_iter().filter(|t| !before.contains(&t.origin())).collect();
+            let new: Vec<Trigger> = self.clips_under_way(tick).into_iter().filter(|t| t.clip_origin.is_none() && !before.contains(&t.origin())).collect();
             self.late.extend(new);
             let kept: std::collections::HashSet<Origin> = self.triggers.iter().chain(&self.late).map(Trigger::origin).collect();
             let gone = |o: Option<Origin>| o.is_some_and(|o| !kept.contains(&o));
             let fade = ((f64::from(self.rate) * RELEASE_SECONDS) as u32).max(1);
             for v in &mut self.voices {
-                if v.cut.is_some() && v.release.is_none() && gone(v.origin) {
+                if v.clip_origin.is_none() && v.cut.is_some() && v.release.is_none() && gone(v.origin) {
                     v.release = Some((fade, fade));
                 }
             }
             for o in &mut self.inst_offs {
-                if gone(o.4) {
+                if o.3.is_none() && gone(o.4) {
                     o.0 = o.0.min(tick);
                 }
             }
@@ -4084,6 +4141,23 @@ impl Engine {
             for (x, s) in self.bus[self.channels[c].insert].iter_mut().zip(&o.buf) {
                 *x += *s;
             }
+            // Its extra ports into the tracks after its own, each with its own delay pad.
+            for (p, aux) in o.aux.iter().enumerate() {
+                if aux.is_empty() {
+                    continue;
+                }
+                let target = self.channels[c].insert + p + 1;
+                if target >= self.bus.len() {
+                    break;
+                }
+                let mut buf = aux.clone();
+                if let Some(pad) = self.pdc.aux_pad.get_mut(c).and_then(|pads| pads.get_mut(p)) {
+                    pad.run(&mut buf);
+                }
+                for (x, s) in self.bus[target].iter_mut().zip(&buf) {
+                    *x += *s;
+                }
+            }
         }
         // The missed notes and controller messages of the instruments that ran have been sent.
         let ran = |c: usize| self.multicore.instrument_ran(c);
@@ -5030,6 +5104,16 @@ fn instrument_job(cx: &InstCx, lane: InstLane, sc: &mut multicore::MixScratch) {
         }));
     }
     out.quiet.note(quiet_in && !out.active && auto_bypass::silent(&out.buf), n);
+    // Extra output ports (ML Chop's pads routed to their own mixer tracks), at the channel's gain.
+    let extra = inst.extra_outputs().min(15);
+    out.aux.resize_with(extra, Vec::new);
+    for (p, aux) in out.aux.iter_mut().enumerate() {
+        aux.clear();
+        let (l, r) = (&mut sc.l[..n], &mut sc.r[..n]);
+        if inst.extra_output(p, l, r) {
+            aux.extend(l.iter().zip(r.iter()).flat_map(|(&a, &b)| [a * gl, b * gr]));
+        }
+    }
     // Delay compensation: the channel waits for the latest path into its track.
     if let Some(pad) = pad.filter(|p| p.len() > 0) {
         pad.run(&mut out.buf);
