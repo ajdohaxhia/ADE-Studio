@@ -426,7 +426,9 @@ mod tests {
         a.state.plugdb.rebuild(&a.plugins);
         let index = a.plugins.index_of(LEMON_TRIO).unwrap();
         let (n, before) = (a.state.project.channels.len(), a.state.project.channels[2].clone());
-        let cmd = crate::plugin_menu::items(&a.state, Target::Replace(2), true).into_iter().find(|it| it.label == LEMON_TRIO).map(|it| it.cmd).unwrap();
+        // The menu groups the instruments by category.
+        let items = crate::plugin_menu::items(&a.state, Target::Replace(2), true);
+        let cmd = items.iter().chain(items.iter().flat_map(|it| it.children.iter())).find(|it| it.label == LEMON_TRIO).map(|it| it.cmd.clone()).unwrap();
         crate::playlist::run(&mut a, cmd);
         let after = &a.state.project.channels[2];
         assert_eq!(a.state.project.channels.len(), n, "no channel added");

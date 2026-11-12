@@ -350,3 +350,16 @@ Full list with messages: `/Volumes/aquilabuild/work/base-msgs.txt`. About 13 are
 **Design conflicts (ask the owner):** tool keys ("p" is Draw in the piano roll; the playlist test expects Paint), typing keyboard off by default (`step_edit` ×5), "Undo history" now in the EDIT menu (3 `history` tests expect the old menu), "Soft takeover" vs "Pickup" wording.
 
 **Environment or stale (likely retire or adapt):** `ai_control` (local network), `tools/notices` (needs network), `tools/watermark` (header check), `splash`, theme, toolbar and window-layout pixel tests, `win_clamp` rounding, browser tests that assume Windows paths (`E:\Pro Samples`).
+
+### Update (same evening, after resuming)
+- The take-solo change in `rack.rs` is **verified**: 55/55 `comping::` and `rack::` tests pass.
+- Also fixed:
+  - `osc3` replace test (searches the categorised plugin menu)
+  - `instrument_template_routes_and_live_reroute` (falls back to `HOME` and skips when the local file is missing)
+  - retired `pattern_click_and_channel_insert_anchor` (Lemon Studio's two-column channel menu)
+- **Full workspace:** 2983 passed, 88 failed, 120 ignored. Down from 104 pre-merge failures; none are new.
+- **Flaky (not a regression):** `plugins/lemon-sampler` `params::tests::editor_edits_reach_the_sound_without_the_host` failed once in the full parallel run and passes alone (80/80, three runs). Sampler live values sit in a table shared by all tests, so parallel tests can collide. Fix by isolating the table per test or serialising these tests.
+- **Small real bugs found, not fixed yet:**
+  - Undoing "add audio clip channel" back to the start leaves the rack filter on Unsorted instead of All (`app::tests::add_audio_and_automation_clip_channels`; not caused by Auto switch display filter, which was checked).
+  - The piano roll's Delete tool swipe removes nothing (`app::tests::piano_tools`, line ~23001).
+- **Reminder:** the build image lives at `/Volumes/SanDisk EXTREME SSD/aquila-build/aquilabuild.sparseimage`. Mount it with `hdiutil attach <that path>` (mounts at `/Volumes/aquilabuild`) and detach it before unplugging the SSD.

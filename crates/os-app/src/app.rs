@@ -19838,7 +19838,9 @@ mod tests {
 
     #[test]
     fn instrument_template_routes_and_live_reroute() {
-        let path=std::path::PathBuf::from(std::env::var_os("USERPROFILE").unwrap()).join("Desktop/AQUILA/TECHNO MAIN.flp");
+        // A local project only some machines have; on others (and macOS, without USERPROFILE) the test does nothing.
+        let Some(home)=std::env::var_os("USERPROFILE").or_else(||std::env::var_os("HOME")) else {return};
+        let path=std::path::PathBuf::from(home).join("Desktop/AQUILA/TECHNO MAIN.flp");
         if !path.is_file(){return;}
         let bytes=std::fs::read(path).unwrap();let mut p=os_flp::project::load(&os_flp::FlpFile::parse(&bytes).unwrap()).unwrap();
         for route in [0,1,2,10,30] {
@@ -24908,6 +24910,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Lemon Studio's two-column channel menu; AQUILA keeps ML Studio's single-column menu"]
     fn pattern_click_and_channel_insert_anchor() {
         use crate::playlist::{self as pl, PItem, Cmd};
         use os_model::ClipSource;
