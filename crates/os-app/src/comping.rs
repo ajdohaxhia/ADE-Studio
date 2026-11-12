@@ -237,7 +237,8 @@ mod tests {
         assert!(originals.iter().all(|c|c.muted&&c.length==384));
         let i=pl::clips(s).iter().position(|c|c.track==1).unwrap();
         s.playlist.range=Some((96,192));
-        assert!(pl::clip_menu(s,i,0.,0.).items.iter().any(|p|p.label=="Use selected time range in comp"&&p.enabled));
+        let menu=pl::clip_menu(s,i,0.,0.);
+        assert!(menu.items.iter().chain(menu.items.iter().flat_map(|p|p.children.iter())).any(|p|p.label=="Use selected time range in comp"&&p.enabled));
         assert!(choose(s,i,true).starts_with("Comp updated"));
         for _ in 0..3 {
             let i=pl::clips(s).iter().position(|c|c.track==1).unwrap();

@@ -3116,8 +3116,11 @@ pub fn play_project(s: &State) -> Project {
     }
     // Take source clips stay muted in the saved project. Solo is a temporary audition.
     if let Some((row,_))=s.playlist.solo.as_ref().filter(|(row,_)|crate::comping::parent(s,*row).is_some()) {
+        let parent=crate::comping::parent(s,*row);
         if let Some(a)=p.arrangement_mut() {
             for c in &mut a.clips {if c.track==*row {c.muted=false;}}
+            // The take is heard alone: its comp (parent) track is silent while it is auditioned.
+            if let Some(t)=parent.and_then(|r|a.tracks.get_mut(usize::from(r))) {t.enabled=false;}
         }
     }
     if s.mixer.all_fx_bypassed {

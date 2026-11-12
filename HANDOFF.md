@@ -37,6 +37,7 @@ The merged result was renamed **AQUILA** and published to **https://github.com/a
 
 | Commit | What |
 | --- | --- |
+| `ca8e151e` | Resolve the remaining merge test failures and add this handoff |
 | `4b00b476` | Retire Lemon Studio UI tests that AQUILA's ML Studio interface replaces |
 | `15e1542e` | Fix more merge regressions: undo, rack, menus, looping |
 | `aa976690` | Fix merge regressions in the engine, sampler and mixer |
@@ -261,12 +262,11 @@ These caused most of the regressions, so check for them when touching merged cod
 
 - Whether to keep or re-enable any retired Lemon Studio UI tests, which would mean porting those UI features into ML Studio's interface.
 - Whether the "Bus N" naming (now everywhere) is wanted, or ML Studio's earlier "Insert N" in the rack and mixer views.
-- `HANDOFF.md` itself is **not committed yet**. Commit it, or keep it local.
 
 
 ## 9. Continuation on 2026-11-12
 
-This section supersedes the remaining-work list in section 6. Changes below are local and uncommitted; nothing has been pushed.
+This section supersedes the remaining-work list in section 6. These changes were committed and pushed as `ca8e151e`.
 
 ### Fixes and test updates
 
@@ -296,4 +296,57 @@ Final full workspace command:
 
 Final log: `/Volumes/aquilabuild/work/last.log`. First continuation full run: `/Volumes/aquilabuild/work/continuation-first.log`. Chop rate diagnostic: `/Volumes/aquilabuild/work/chop-red.log`.
 
-Next work, if requested: investigate the 104 baseline failures; do not classify them as unresolved merge regressions. Review/commit the local changes and this handoff when desired. No commit or push was performed during continuation.
+Next work, if requested: investigate the 104 baseline failures; do not classify them as unresolved merge regressions. The continuation's changes and this handoff are committed and pushed (`ca8e151e`).
+
+---
+
+## 10. Session paused (2026-11-12, evening): start here next time
+
+### State
+- Pushed: `ca8e151e` on `ade/main` and `ade/michael-lane`. Every merge regression is resolved; the full workspace had 2968 passed and 104 failed, and all 104 failures were already failing in ML Studio before the merge.
+- **Uncommitted local work** (below) started on those 104 pre-existing failures. **None of it has been committed or pushed.**
+- The build helper `/Volumes/aquilabuild/chk.sh` and `/Volumes/aquilabuild/work/newfail.sh` point at `/Users/ade/Downloads/AQUILA/ML-Studio` (fixed this session). The disk image `/Volumes/aquilabuild` must be mounted.
+
+### Uncommitted changes, by file
+| File | Change | Verified? |
+| --- | --- | --- |
+| `HANDOFF.md` | Out-of-date lines fixed (commit table, "not committed" notes); this section | n/a |
+| `crates/os-app/src/vocal/mod.rs` | Test fixture: each test gets its own temp folder (parallel tests were rewriting one shared `Vocal.wav`, giving "Original recording changed during analysis") | Yes: all 14 `vocal::` tests pass |
+| `crates/os-app/src/mpe.rs` | `mpe::chop` (Quick chop, Ctrl+U) now records an undo step (`Some("Piano roll edit")`); before, it couldn't be undone | Yes: `piano_keys::legato_chop_and_paste` passes |
+| `crates/os-app/assets/native-generators-groups.json`, `native-effects-groups.json` | Factory plugin folders use the current "ML …" names (old names kept), so built-ins no longer land in "Unsorted" | Yes: all `plugin_menu::` tests pass |
+| `crates/os-app/src/strip_silence.rs`, `comping.rs` | Tests search submenus (ML Studio's clip menu nests Strip silence and "Use selected time range in comp") | Yes: these 2 pass |
+| `crates/os-app/src/rack.rs` (`play_project`) | While a take is soloed, its comp (parent) track is disabled in the playback copy only | **No: the test run was stopped before it finished.** Run `comping::` and `rack::` first. |
+
+### First thing next session
+```bash
+cd /Users/ade/Downloads/AQUILA/ML-Studio
+```
+
+```bash
+/Volumes/aquilabuild/chk.sh test -p os-app --bins -- comping:: rack::
+```
+
+```bash
+/Volumes/aquilabuild/work/newfail.sh --workspace --lib --bins --tests --no-fail-fast
+```
+
+Then check that the pass count went up and that no failures outside the baseline appear, and commit and push:
+
+```bash
+git push ade HEAD:michael-lane HEAD:main
+```
+
+### The 104 pre-existing failures, triaged
+Full list with messages: `/Volumes/aquilabuild/work/base-msgs.txt`. About 13 are fixed by the work above (vocal ×8, legato/chop, plugin_menu ×2, strip_silence, comping ×1, plus comping solo once verified).
+
+**Worth checking (may be real bugs):**
+- `app::tests::sampler_settings_save_and_reopen`: on save, `app.rs` (~line 2346) deliberately keeps the rack's "Follow global pitch" over the sampler's own "Affected by the main pitch". A change made only in the sampler UI may be lost. ML Studio did this on purpose; the right fix is to push host toggles into the plugin, then drop the override. Needs a decision.
+- `osc3::tests::replace_puts_another_generator_on_a_channel`, `app::tests::instrument_template_routes_and_live_reroute`, `app::tests::pattern_click_and_channel_insert_anchor` (unwrap on None)
+- `app::tests::add_audio_and_automation_clip_channels` (rack filter becomes Unsorted, expected All)
+- `app::tests::piano_tools` (the Delete tool swipe removes nothing)
+- `wav::tests::writes_edisons_chunk_set_in_order` (`plugins/tesla`): LIST INFO size 22 vs 18, probably the longer "AQUILA" software name
+- `plugins/lemon-small-fx` `factory_presets_list_every_parameter_and_hold_fls_states`: a preset file is missing
+
+**Design conflicts (ask the owner):** tool keys ("p" is Draw in the piano roll; the playlist test expects Paint), typing keyboard off by default (`step_edit` ×5), "Undo history" now in the EDIT menu (3 `history` tests expect the old menu), "Soft takeover" vs "Pickup" wording.
+
+**Environment or stale (likely retire or adapt):** `ai_control` (local network), `tools/notices` (needs network), `tools/watermark` (header check), `splash`, theme, toolbar and window-layout pixel tests, `win_clamp` rounding, browser tests that assume Windows paths (`E:\Pro Samples`).

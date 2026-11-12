@@ -864,7 +864,8 @@ pub fn chop(s: &mut State, size: u32) -> bool {
             }
             out
         },
-        None,
+        // Quick chop (Ctrl+U) is one undo step like the other note tools.
+        Some("Piano roll edit"),
     );
     s.project.mpe.expressions.extend(added);
     changed

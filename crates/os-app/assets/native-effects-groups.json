@@ -1,33 +1,57 @@
 {
   "Dynamics": [
+    "ML Limiter",
+    "ML Soft Clipper",
+    "ML Transient Processor",
+    "ML Press",
     "Lemon Limiter",
     "Lemon Soft Clipper",
     "Lemon Transient Processor",
     "Press"
   ],
   "EQ and Filters": [
+    "ML EQ",
+    "ML Pulp Filter",
+    "Lemon Filter",
     "Lemon Parametric EQ",
     "Pulp Filter"
   ],
   "Reverb and Delay": [
+    "ML Reverb",
+    "ML Hall",
+    "ML Delay",
     "Lemon Reverb",
     "Lemon Delay"
   ],
   "Modulation": [
+    "ML Chorus",
+    "Lemon Flanger",
+    "Lemon Phaser",
+    "Lemon Vocoder",
     "Lemon Chorus"
   ],
   "Distortion": [
+    "ML Fast Distortion",
+    "ML Tape",
     "Lemon Fast Distortion"
   ],
   "Stereo and Utility": [
+    "ML Balance",
+    "ML Stereo Enhancer",
+    "ML Stereo Shaper",
+    "Lemon Peak Controller",
+    "Lemon Formula Controller",
+    "Lemon Drop",
     "Lemon Balance",
     "Lemon Stereo Enhancer",
     "Lemon Stereo Shaper"
   ],
   "Audio Editing": [
+    "ML Tesla",
     "Tesla"
   ],
   "Mastering": [
+    "ML Master Assistant",
     "Lemon Master Assistant"
   ]
 }

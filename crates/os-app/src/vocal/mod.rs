@@ -249,7 +249,9 @@ pub fn key_input(app:&mut App,key:&winit::keyboard::Key,ctrl:bool,alt:bool)->boo
 #[cfg(test)]mod tests{
  use super::*;use crate::app::{Action,Win};use os_ui::{Canvas,Rect};
  fn fixture()->(App,PathBuf,usize){
-  let dir=std::env::temp_dir().join(format!("lemon-vocal-ui-{}",std::process::id()));std::fs::create_dir_all(&dir).unwrap();let source=dir.join("Vocal.wav");let rate=24000u32;
+  static NEXT:std::sync::atomic::AtomicUsize=std::sync::atomic::AtomicUsize::new(0);
+  // Each test its own folder: tests run in parallel and must not rewrite one another's source while it is analysed.
+  let dir=std::env::temp_dir().join(format!("lemon-vocal-ui-{}-{}",std::process::id(),NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed)));std::fs::create_dir_all(&dir).unwrap();let source=dir.join("Vocal.wav");let rate=24000u32;
   let audio:Vec<f32>=(0..rate*2).flat_map(|i|{let t=i as f32/rate as f32;let hz=if t<0.25{220.}else if (0.4..0.8).contains(&t){261.626}else if (1.05..1.5).contains(&t){329.628}else{0.};let x=if hz>0.{(t*hz*std::f32::consts::TAU).sin()*0.2}else{0.};[x,x]}).collect();
   os_engine::wav::write_f32_stereo(&mut std::fs::File::create(&source).unwrap(),rate,&audio).unwrap();
   let mut app=App::new(None);app.state.project=crate::app::test_project();app.state.tempo=120.;app.state.project.data_folder=Some(os_model::DataFolder{choice:2,folder:dir.to_string_lossy().into_owned()});
