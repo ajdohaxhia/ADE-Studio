@@ -22995,7 +22995,9 @@ mod tests {
         let d5: Vec<(u32, u32)> = mine(&app).iter().filter(|n| n.key == 62).map(|n| (n.position, n.length)).take(2).collect();
         assert_eq!(d5, vec![(0, 24), (24, 24)]);
 
-        // Delete: swipe across the D5 row removes every note touched.
+        // Delete: swipe across the D5 row removes every note touched. AQUILA's D duplicates notes by default (ML
+        // Studio's "D duplicates notes" option); with it off, D picks the Delete tool.
+        crate::prefs::set_text("piano_d_duplicate", "0");
         app.key(&Key::Character("d".into()), false, false);
         swipe(&mut app, &mut c, (g.x_of(1.0), row(62)), (g.x_of(330.0), row(62)), false);
         assert_eq!(mine(&app).iter().filter(|n| n.key == 62).count(), 0);
@@ -23035,7 +23037,8 @@ mod tests {
         let notes = piano::notes(&app.state);
         assert!(!sel.is_empty() && sel.iter().all(|&i| notes[i].position < 96));
         app.key(&Key::Character("a".into()), true, false);
-        assert_eq!(app.state.piano.range, Some((0, piano::pattern_end(&app.state))), "Ctrl+A: the whole pattern");
+        // ML Studio's Ctrl+A selects every note but keeps a time range picked by hand.
+        assert_eq!(app.state.piano.range, Some((0, 96)), "Ctrl+A keeps the manual range");
     }
 
     /// Ctrl+B with a time selection (spec: ui/piano-roll.md §9, §10): the copies move by the range's length, keeping
@@ -29097,6 +29100,9 @@ mod tests {
         let entry = |label: &str| (0..).find(|&i| item_at(ADD_MENU, i).is_some_and(|it| it.label == label)).unwrap();
         let mut app = App::new(None);
         app.state.project = test_project();
+        // Auto switch display filter (on in AQUILA) would move the filter to the selected channel's group first.
+        app.state.rack.opts.remove(crate::rack::AUTO_FILTER);
+        app.state.rack.filter = Filter::All;
         // A file's groups: Drums, then Unsorted.
         app.state.rack.groups = vec![Group { name: "Drums".into(), members: [0, 3].into_iter().collect() }];
         app.state.rack.unsorted_at = Some(1);

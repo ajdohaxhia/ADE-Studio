@@ -359,7 +359,8 @@ Full list with messages: `/Volumes/aquilabuild/work/base-msgs.txt`. About 13 are
   - retired `pattern_click_and_channel_insert_anchor` (Lemon Studio's two-column channel menu)
 - **Full workspace:** 2983 passed, 88 failed, 120 ignored. Down from 104 pre-merge failures; none are new.
 - **Flaky (not a regression):** `plugins/lemon-sampler` `params::tests::editor_edits_reach_the_sound_without_the_host` failed once in the full parallel run and passes alone (80/80, three runs). Sampler live values sit in a table shared by all tests, so parallel tests can collide. Fix by isolating the table per test or serialising these tests.
-- **Small real bugs found, not fixed yet:**
-  - Undoing "add audio clip channel" back to the start leaves the rack filter on Unsorted instead of All (`app::tests::add_audio_and_automation_clip_channels`; not caused by Auto switch display filter, which was checked).
-  - The piano roll's Delete tool swipe removes nothing (`app::tests::piano_tools`, line ~23001).
+- **The two suspected bugs were checked (later the same evening):**
+  - Rack filter after undo: undo restored the filter correctly. The app starts on Unsorted where the test assumed All, so the test now sets All. Real fix kept: `history::put_rack` marks the restored selection as seen, so Auto switch display filter can't move the restored filter again.
+  - Piano roll Delete tool: works. In AQUILA, D duplicates notes by default (ML Studio's "D duplicates notes" option), and Ctrl+A keeps a manual time range. The test was adapted.
+- **Full workspace now:** 2986 passed, 85 failed (all pre-merge), 120 ignored. Remaining list: `/Volumes/aquilabuild/work/last.log`; triage notes earlier in this section.
 - **Reminder:** the build image lives at `/Volumes/SanDisk EXTREME SSD/aquila-build/aquilabuild.sparseimage`. Mount it with `hdiutil attach <that path>` (mounts at `/Volumes/aquilabuild`) and detach it before unplugging the SSD.

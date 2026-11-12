@@ -711,6 +711,8 @@ fn put_rack(s: &mut State, r: RackSide) {
     }
     (s.rack.groups, s.rack.filter, s.rack.unsorted_at) = (groups, filter, unsorted_at);
     (s.rack.sel, s.selected_channel) = (sel, selected);
+    // The restored filter goes with the restored selection: Auto switch display filter must not move it again.
+    s.rack.filter_seen = Some(selected);
     (s.playlist.source, s.playlist.picker) = (source, picker);
 }
 
