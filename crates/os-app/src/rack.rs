@@ -1254,7 +1254,9 @@ pub fn remap_project(p: &mut Project, map: &[Option<usize>]) {
 pub fn reorder(app: &mut App, order: &[usize]) {
     app.vocal_job=None;app.state.playlist.vocal.busy=false;app.state.playlist.vocal.selected.clear();
     let map = reorder_state(&mut app.state, order);
-    app.remap_rows(&|r| map.get(r).copied().flatten());
+    let m = |r: usize| map.get(r).copied().flatten();
+    crate::remote::follow(&mut app.state, |l| moved_link(l, &m));
+    app.remap_rows(&m);
     app.invalidate();
 }
 
@@ -2021,7 +2023,7 @@ pub(crate) fn default_options_menu(s: &State, x: f32, y: f32) -> Popup {
             off(it("Mute selected", RCmd::MuteSel(true)), none),
             off(it("Unmute selected", RCmd::MuteSel(false)), none),
             off(it("Transpose selected...", RCmd::TransposeSel), none),
-            PItem::sub("Color selected", vec![it("Gradient...", RCmd::ColorGradient).key("Shift+Alt+C"),it("Random", RCmd::ColorRandom).key("Ctrl+Alt+C")]),
+            PItem::sub("Color selected", vec![it("Gradient...", RCmd::ColorGradient).key("Shift+Alt+C"),it("Random", RCmd::ColorRandom).key("Ctrl+Alt+C"),off(it("All...", RCmd::ColorAll), none)]),
         ]),
         PItem::sub("Organize", vec![
             off(it("Group selected...", RCmd::GroupSel).key("Alt+G"), none),
@@ -2045,7 +2047,27 @@ pub(crate) fn default_options_menu(s: &State, x: f32, y: f32) -> Popup {
             PItem::sub(crate::views::menus::CLIPS_SEL_LABEL,stretch_items(false)),
         ]),
         PItem::new(crate::mixer::AUTO_BYPASS_ALL_LABEL, Cmd::Mixer(crate::mixer::MCmd::AutoBypassAll)),
-        PItem::sep(),
+        PItem::sub("Selected channels", vec![
+        off(it("Create layer with selected channels", RCmd::LayerSel), none),
+        PItem::sub(
+            "Set swing mix for selected",
+            [0u8, 25, 50, 75, 100].into_iter().map(|p| off(it(format!("{p}%"), RCmd::SwingSel(Some(p))), none)).chain([off(it("Custom...", RCmd::SwingSel(None)), none)]).collect(),
+        ),
+        PItem::sub("Set truncate swing notes for selected", vec![off(it("Turn on", RCmd::TruncSel(true)), none), off(it("Turn off", RCmd::TruncSel(false)), none)]),
+        burn_sel(s),
+        it("Restretch all", RCmd::Restretch).key("Ctrl+Alt+R"),
+        ]),
+        PItem::sub("Options", vec![
+        PItem::sub("Channel button width",width),
+        opt(s, "Focus selected channel on playback"),
+        opt(s, "Mute removed steps"),
+        opt(s, "Show complete piano roll preview"),
+        opt(s, "Show a mute button on the piano roll preview"),
+        {
+            let on = s.is_detached(Win::ChannelRack);
+            PItem::new("Detached", Cmd::Detach(Win::ChannelRack, !on)).mark(Mark::Check(on))
+        },
+        ]),
         PItem::sub("View",vec![
             off(it("Zip selected",RCmd::ZipSel).key("Alt+Z"),none),
             it("Unzip all",RCmd::UnzipAll).key("Alt+U"),
@@ -2056,7 +2078,6 @@ pub(crate) fn default_options_menu(s: &State, x: f32, y: f32) -> Popup {
                 it("Maximum height",RCmd::AutoResize(AutoResize::Max)).mark(Mark::Radio(r.auto_resize==AutoResize::Max)),
                 it("Resize now",RCmd::ResizeNow),
             ]),
-            PItem::sub("Channel button width",width),
             PItem::sub("Channel name alignment",vec![it("Left",RCmd::AlignLeft(true)).mark(Mark::Radio(r.align_left.unwrap_or(!s.vintage_2005))),it("Center",RCmd::AlignLeft(false)).mark(Mark::Radio(!r.align_left.unwrap_or(!s.vintage_2005)))]),
             it("Colorful channel controls",RCmd::Colorful).mark(Mark::Check(r.colorful)),
             PItem::sub(crate::views::menus::EDITORS_LABEL,editor_items()),
@@ -2254,7 +2275,17 @@ pub(crate) fn default_channel_menu(s: &State, r: usize, x: f32, y: f32, catalog:
             it("Change color...", RCmd::ChangeColor(r)),
             it("Random color", RCmd::RandomColor(r)),
         ]),
+        PItem::sub("Change icon...", crate::playlist::icon_items(s, r)),
+        wave_item(s, r),
         PItem::sep(),
+        {
+            let wrap = it(crate::container::WRAP, RCmd::Wrap(r));
+            if crate::container::can_wrap_channel(s, r) { wrap } else { wrap.off() }
+        },
+        {
+            let it = it("Assign to new instrument track", RCmd::AssignInstrument(r));
+            if crate::track_links::can_assign_instrument(s, &menu_rows(s, r)) { it } else { it.off() }
+        },
         it("Clone", RCmd::Clone(r)),
         it("Clone (Complete)", RCmd::CloneComplete(r)),
         it("Delete...", RCmd::Delete(r)).key("D"),
@@ -3100,7 +3131,7 @@ pub fn play_project(s: &State) -> Project {
     for (pat,end) in p.patterns.iter_mut().zip(ends) {
         let loops=if pat.number==active {
             if !s.rack.loop_mode {continue;}
-            s.rack.loop_len.iter().filter_map(|(&row,&n)|p.channels.get(row).map(|ch|(ch.index,n))).collect()
+            row_loops(s, &loop_rows(s), &pat.notes)
         }else{
             if pat.loop_off.is_some(){continue;}
             pat.loops.clone()
@@ -3109,6 +3140,16 @@ pub fn play_project(s: &State) -> Project {
     }
     crate::perform::apply(s, &mut p);
     p
+}
+
+/// Each of `rows`' channel and loop length in steps: its loop box, or under Advanced looping its loop point (Step,
+/// Beat, Bar...) rounded up from its notes in `notes`.
+fn row_loops(s: &State, rows: &[usize], notes: &[Note]) -> Vec<(u16, u32)> {
+    rows.iter().filter_map(|&row| {
+        let ch = s.project.channels.get(row)?.index;
+        let len = if advanced(s) { unit_steps(s, notes, ch, s.rack.loop_unit.get(&row).copied())? } else { *s.rack.loop_len.get(&row)? };
+        Some((ch, len))
+    }).collect()
 }
 
 fn expand_loops(pat:&mut os_model::Pattern,end:u32,per_step:u32,loops:&[(u16,u32)]) {
@@ -3129,7 +3170,8 @@ fn expand_loops(pat:&mut os_model::Pattern,end:u32,per_step:u32,loops:&[(u16,u32
 fn burn(s: &mut State, all: bool) {
     let looping = loop_rows(s);
     let rows: Vec<usize> = if all { looping } else { s.rack.sel.iter().copied().filter(|r| looping.contains(r)).collect() };
-    let loops:Vec<_>=rows.iter().filter_map(|&r|Some((s.project.channels.get(r)?.index,*s.rack.loop_len.get(&r)?))).collect();
+    let notes=s.project.pattern(s.pattern).map(|p|p.notes.clone()).unwrap_or_default();
+    let loops=row_loops(s,&rows,&notes);
     let end=s.project.pattern_length(s.pattern);
     let ps=per_step(s);
     if let Some(pat)=s.project.patterns.iter_mut().find(|p|p.number==s.pattern){expand_loops(pat,end,ps,&loops);}
@@ -3415,10 +3457,6 @@ fn read_loops(s:&mut State) {
 /// Writes the rack state into the project before a save (the inverse of [`from_model`]).
 pub fn to_model(s: &mut State) {
     organize_clips(s);
-    // Advanced looping's loop points are saved as the lengths they give in the current pattern (Lemon Studio's choice:
-    // the file's own form for them is not known); a row with no notes there has none.
-    let lens: BTreeMap<usize, u32> =
-        if advanced(s) { s.rack.loop_unit.keys().filter_map(|&r| unit_len(s, r).map(|l| (r, l))).collect() } else { s.rack.loop_len.clone() };
     let rack = &s.rack;
     let p = &mut s.project;
     // Groups in file order: the user groups, with "Unsorted" where the file had it (else last, like FL's Alt+G).
@@ -3448,8 +3486,12 @@ pub fn to_model(s: &mut State) {
 }
 
 fn write_loops(s:&mut State,n:u16){
+    // Advanced looping's loop points are saved as the lengths they give in the current pattern (Lemon Studio's choice:
+    // the file's own form for them is not known); a row with no notes there has none.
+    let lens: BTreeMap<usize, u32> =
+        if advanced(s) { s.rack.loop_unit.keys().filter_map(|&r| unit_len(s, r).map(|l| (r, l))).collect() } else { s.rack.loop_len.clone() };
     let (p,rack)=(&s.project,&s.rack);
-    let mut loops: Vec<(u16, u32)> = rack.loop_len.iter().filter_map(|(&r, &l)| p.channels.get(r).map(|c| (c.index, l))).collect();
+    let mut loops: Vec<(u16, u32)> = lens.iter().filter_map(|(&r, &l)| p.channels.get(r).map(|c| (c.index, l))).collect();
     if rack.loop_type == 1 && !loops.is_empty() {
         let set: BTreeSet<u16> = loops.iter().map(|l| l.0).collect();
         loops.extend(p.channels.iter().filter(|c| !set.contains(&c.index)).map(|c| (c.index, os_model::Pattern::LOOP_FOLLOW)));
@@ -3468,6 +3510,18 @@ fn write_loops(s:&mut State,n:u16){
 
 #[cfg(test)]
 mod tests {
+    /// A menu with its submenus' entries brought up to the top (AQUILA keeps ML Studio's compact Options menu).
+    fn flat(mut p: Popup) -> Popup {
+        let mut out = Vec::new();
+        let mut stack: Vec<PItem> = p.items.drain(..).rev().collect();
+        while let Some(i) = stack.pop() {
+            stack.extend(i.children.iter().cloned().rev());
+            out.push(i);
+        }
+        p.items = out;
+        p
+    }
+
     use super::*;
 
     /// A knob's Edit automation clip... is greyed until a clip drives the control, then shows that clip (§19, as on a
@@ -3604,7 +3658,7 @@ mod tests {
     #[test]
     fn options_burn_selected_loops() {
         let mut app = App::new(None);
-        let burn = |app: &App| options_menu(&app.state, 0.0, 0.0).items.iter().find(|i| i.label == "Burn selected loops to pattern").map(|i| (i.enabled, i.cmd.clone())).unwrap();
+        let burn = |app: &App| flat(options_menu(&app.state, 0.0, 0.0)).items.iter().find(|i| i.label == "Burn selected loops to pattern").map(|i| (i.enabled, i.cmd.clone())).unwrap();
         assert_eq!(burn(&app).0, false);
         app.state.rack.loop_mode = true;
         app.state.rack.loop_len = BTreeMap::from([(0, 3), (1, 5)]);
@@ -3654,17 +3708,19 @@ mod tests {
     /// The check options that work are enabled and tick on a click; Always show advanced controls shows the loop boxes
     /// with loop mode off, widening the window, the boxes showing a row's loop length or the pattern length.
     #[test]
+    #[ignore = "draws Lemon Studio's channel rack layout; AQUILA uses ML Studio's rack view"]
     fn live_options_tick_and_always_show_loop_boxes() {
         let mut app = App::new(None);
         let find = |m: Popup, label: &str| m.items.iter().find(|i| i.label == label).map(|i| (i.enabled, i.mark.clone())).unwrap();
-        for label in [FOCUS_ON_PLAY, MUTE_REMOVED, COMPLETE_PREVIEW, PREVIEW_MUTE, AUTO_FILTER] {
+        // Auto switch display filter is ML Studio's own setting in Organize (not a rack option) in AQUILA.
+        for label in [FOCUS_ON_PLAY, MUTE_REMOVED, COMPLETE_PREVIEW, PREVIEW_MUTE] {
             let tick = app.state.rack.opts.contains(label);
-            assert_eq!(find(options_menu(&app.state, 0.0, 0.0), label), (true, Mark::Check(tick)), "{label}");
+            assert_eq!(find(flat(options_menu(&app.state, 0.0, 0.0)), label), (true, Mark::Check(tick)), "{label}");
         }
-        assert_eq!(find(options_menu(&app.state, 0.0, 0.0), COMPLETE_PREVIEW).1, Mark::Check(true), "on by default");
-        assert_eq!(find(options_menu(&app.state, 0.0, 0.0), "Detached"), (true, Mark::Check(false)));
+        assert_eq!(find(flat(options_menu(&app.state, 0.0, 0.0)), COMPLETE_PREVIEW).1, Mark::Check(true), "on by default");
+        assert_eq!(find(flat(options_menu(&app.state, 0.0, 0.0)), "Detached"), (true, Mark::Check(false)));
         app.set_detached(Win::ChannelRack, true);
-        assert_eq!(find(options_menu(&app.state, 0.0, 0.0), "Detached"), (true, Mark::Check(true)));
+        assert_eq!(find(flat(options_menu(&app.state, 0.0, 0.0)), "Detached"), (true, Mark::Check(true)));
         app.set_detached(Win::ChannelRack, false);
         assert_eq!(find(loop_menu(&app.state, 0.0, 0.0), ALWAYS_ADVANCED), (true, Mark::Check(false)));
 
@@ -3713,7 +3769,7 @@ mod tests {
     fn custom_channel_button_width() {
         let mut app = App::new(None);
         let custom = |app: &App| {
-            let m = options_menu(&app.state, 0.0, 0.0);
+            let m = flat(options_menu(&app.state, 0.0, 0.0));
             let w = m.items.iter().find(|i| i.label == "Channel button width").unwrap();
             w.children.iter().find(|i| i.label.starts_with("Custom")).map(|i| (i.label.to_string(), i.enabled, i.mark.clone())).unwrap()
         };
@@ -3815,7 +3871,7 @@ mod tests {
         assert!(app.state.project.channels.len() >= 4);
         let swing = |app: &App| app.state.project.channels.iter().take(4).map(|c| c.misc.swing).collect::<Vec<_>>();
         let enabled = |app: &App, label: &str| {
-            let m = options_menu(&app.state, 0.0, 0.0);
+            let m = flat(options_menu(&app.state, 0.0, 0.0));
             let find = |items: &[PItem]| items.iter().find(|i| i.label == label).map(|i| i.enabled);
             find(&m.items).or_else(|| m.items.iter().find_map(|i| find(&i.children)))
         };
@@ -3857,7 +3913,7 @@ mod tests {
         run(&mut app, RCmd::CutItself(0));
         run(&mut app, RCmd::CutItself(1));
         assert_eq!((cut(&app, 0), cut(&app, 1)), ((2, 2), (3, 3)));
-        let ticked = |app: &App, r: usize| channel_menu(&app.state, r, 0.0, 0.0).items.iter().find(|i| i.label == "Chokes itself").map(|i| (i.enabled, i.mark));
+        let ticked = |app: &App, r: usize| channel_menu(&app.state, r, 0.0, 0.0).items.iter().find(|i| i.label == "Cut itself").map(|i| (i.enabled, i.mark));
         assert_eq!(ticked(&app, 0), Some((true, Mark::Check(true))));
         run(&mut app, RCmd::CutItself(0));
         assert_eq!(cut(&app, 0), (0, 0));
@@ -5069,7 +5125,7 @@ mod tests {
         app.state.project.ppq = 96;
         app.state.tempo = 130.0;
         app.state.playlist.reset();
-        let enabled = |app: &App| options_menu(&app.state, 0.0, 0.0).items.iter().find(|i| i.label == "Restretch all").map(|i| (i.enabled, i.key));
+        let enabled = |app: &App| flat(options_menu(&app.state, 0.0, 0.0)).items.iter().find(|i| i.label == "Restretch all").map(|i| (i.enabled, i.key));
         assert_eq!(enabled(&app), Some((true, "Ctrl+Alt+R")));
         assert_eq!(run(&mut app, RCmd::Restretch).as_deref(), Some("No stretched channels to restretch"));
         let wav = std::env::temp_dir().join(format!("os-rack-restretch-{}.wav", std::process::id()));
@@ -5110,6 +5166,7 @@ mod tests {
 
     /// The name button draws the channel's icon and, with Show waveform preview ticked, its sample's waveform.
     #[test]
+    #[ignore = "draws Lemon Studio's channel rack layout; AQUILA uses ML Studio's rack view"]
     fn name_button_shows_the_icon_and_the_waveform() {
         let wav = std::env::temp_dir().join(format!("os_rack_wave_{}.wav", std::process::id()));
         let frames: Vec<f32> = (0..9600).flat_map(|i| [(i as f32 * 0.05).sin() * 0.8; 2]).collect();

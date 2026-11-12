@@ -603,6 +603,17 @@ fn apply_swatch(s: &mut State, c: u32) {
         }
         return;
     }
+    // Color selected ▸ All...: every selected channel, and the box closes.
+    if let Some(BoxTarget::Rack(crate::rack::RBox::ColorSel)) = target {
+        for r in s.rack.sel.clone() {
+            if let Some(ch) = s.project.channels.get_mut(r) {
+                ch.color = color;
+            }
+        }
+        s.pat_ui.name_box = None;
+        s.piano.dirty = true;
+        return;
+    }
     let source = match target {
         Some(BoxTarget::Name(n)) => os_model::ClipSource::Pattern(n),
         Some(BoxTarget::Rack(crate::rack::RBox::Channel(r))) => {

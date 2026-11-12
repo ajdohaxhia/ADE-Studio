@@ -1787,14 +1787,14 @@ pub const LINKED_EFFECTS: [&str; 20] = [
     "ML Stereo Shaper",
     "Lemon Filter",
     TESLA,
+    "ML Tape",
+    "ML Hall",
     "Lemon Flanger",
     "Lemon Phaser",
     LEMON_PEAK_CONTROLLER,
     LEMON_FORMULA_CONTROLLER,
     LEMON_VOCODER,
     LEMON_DROP,
-    "ML Tape",
-    "ML Hall",
 ];
 /// Lemon Studio's effects compiled in that a project stores under the FL plugin they recreate, with that plugin's
 /// state (`new_slot`, `store_builtin_states`), so they are never saved wrapped.

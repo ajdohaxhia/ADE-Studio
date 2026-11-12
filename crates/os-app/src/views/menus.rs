@@ -71,6 +71,8 @@ pub enum MenuCmd {
     SaveAudioClip,
     /// HELP > Diagnostics (`crate::diagnostics`).
     Diagnostics,
+    /// FILE ▸ Collaborate... (live collaboration).
+    Collaborate,
     /// HELP > Check for updates (`crate::update`).
     CheckUpdates,
     /// HELP's entries that open a page in the web browser (`crate::help_links`).
@@ -228,7 +230,7 @@ pub const OPT_INFO: usize = 9;
 pub const HELP_MENU: usize = 7;
 pub const HELP_ABOUT: usize = 11;
 pub const HELP_GUIDE: usize = 0;
-pub const HELP_CHANGE_LOG: usize = 4;
+pub const HELP_CHANGE_LOG: usize = 7;
 /// Index of the ADD and TOOLS menus.
 pub const ADD_MENU: usize = 2;
 pub const TOOLS_MENU: usize = 6;
@@ -264,7 +266,7 @@ const FILE: &[Item] = &[
     SEP,
     it("Exit", "").on(),
     SEP,
-    it(crate::collaboration::LABEL, "").on(),
+    it(crate::collaboration::LABEL, "").on().cmd(MenuCmd::Collaborate),
 ];
 
 /// The project's undo history (spec: ui/settings-choices.md "Undo history: the four checks (2026-10-16)"): the first
@@ -1296,7 +1298,9 @@ mod tests {
         let by_place = [(0, FILE_NEW), (0, FILE_OPEN), (0, FILE_SAVE), (0, FILE_SAVE_AS), (0, FILE_SAVE_VERSION), (0, FILE_EXPORT), (0, FILE_EXPORT_MP3), (0, FILE_EXPORT_MIDI), (0, FILE_EXIT)];
         for (mi, m) in MENUS.iter().enumerate() {
             for (i, it) in m.cols.iter().flat_map(|(_, items)| items.iter()).enumerate().filter(|(_, it)| it.kind == Kind::Item) {
-                if works(mi, it) && !by_place.contains(&(mi, i)) {
+                // AQUILA keeps ML Studio's entries that are dispatched by their label.
+                let by_label = ["Compact", "Classic FL-style (CPU and MB)", "Lemon live monitor", crate::help::LABEL, crate::change_log::LABEL, "Community Discord"];
+                if works(mi, it) && !by_place.contains(&(mi, i)) && !by_label.contains(&it.label) {
                     assert_ne!(it.cmd, MenuCmd::None, "{} works but has no command", it.label);
                 }
             }
@@ -1392,7 +1396,6 @@ pub fn toolbar_items(s: &State) -> Vec<crate::playlist::PItem> {
         switch("Edit", Switch::Edit, s.bar.editing),
         switch("Separators", Switch::Separators, o.separators),
         switch("Flat buttons", Switch::Flat, o.flat),
-        PItem::not_yet("Show detected MIDI chords near the status bar").mark(Mark::Check(false)),
         PItem::sep(),
         switch("Status bar", Switch::HintBar, o.hint_bar),
         switch("Tesla audio editor",Switch::Tesla,crate::settings_file::flag("toolbar_tesla",false)),
@@ -1476,7 +1479,7 @@ pub fn clock_popup(s: &State, x: f32, y: f32) -> crate::playlist::Popup {
  #[test] fn community_cleanup_menus_toolbar_and_resize(){
   let mut app=crate::app::App::new(None);
   for m in 0..MENUS.len(){let rows=organized_items(&app.state,m);assert!(!rows.is_empty());assert!(rows.len()<22,"menu {m} still too long");
-   fn commands(rows:&[crate::playlist::PItem],out:&mut Vec<(usize,usize)>){for r in rows{assert!(!matches!(r.cmd,crate::playlist::Cmd::NotYet(_)));if let crate::playlist::Cmd::MainMenu(m,i)=r.cmd{out.push((m,i));}commands(&r.children,out);}}
+   fn commands(rows:&[crate::playlist::PItem],out:&mut Vec<(usize,usize)>){for r in rows{assert!(!matches!(r.cmd,crate::playlist::Cmd::NotYet(_)),"{} is not available",r.label);if let crate::playlist::Cmd::MainMenu(m,i)=r.cmd{out.push((m,i));}commands(&r.children,out);}}
    let mut cmds=vec![];commands(&rows,&mut cmds);let mut unique=cmds.clone();unique.sort();unique.dedup();// Mixer is intentionally reachable both directly in View and under Toolbars.
    let mixer=(VIEW,VIEW_ITEMS.iter().position(|item|item.label=="Mixer").unwrap());
    if m==VIEW{assert_eq!(cmds.iter().filter(|c|**c==mixer).count(),2);}

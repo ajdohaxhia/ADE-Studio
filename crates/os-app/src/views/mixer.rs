@@ -729,7 +729,7 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
         let db = levels.map(meters::vu_db);
         ui.hit(meter, Action::Mix(MHit::Meter(n)), format!("Click to switch VU / peak meter | VU L {:+.1} / R {:+.1}", db[0], db[1]));
     }
-    let name = track.and_then(|m| m.name.clone()).unwrap_or_else(|| if n == 0 { "Master".into() } else { format!("Insert {n}") });
+    let name = track.and_then(|m| m.name.clone()).unwrap_or_else(|| if n == 0 { "Master".into() } else { format!("Bus {n}") });
     let name_c = track.and_then(|m| m.color).map(|c| mix(super::rgb(c), ui.t.tx(0xe1e7eb), 0.22)).unwrap_or(if selected || also { ui.t.text } else { ui.t.tx(0xaab2b7) });
     if bus && !standard {
         let badge = Rect::new(left + 23.0, meter.bottom() + 23.0, width - 46.0, 9.0);

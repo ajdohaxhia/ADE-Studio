@@ -63,9 +63,17 @@ const PLUGIN_PAGES: [(&str, &str); 28] = [
 /// A plugin menu's Help for Lemon Studio's own plugin `name`: its page in the wiki, or the wiki's overview of them if
 /// it has none.
 pub fn plugin_page(name: &str) -> String {
-    // ML Studio renamed most built-in plugins from "Lemon X" to "ML X"; their pages keep the Lemon Studio names.
-    let lemon = name.strip_prefix("ML ").map(|rest| format!("Lemon {rest}"));
-    match PLUGIN_PAGES.iter().find(|&&(plugin, _)| plugin == name || lemon.as_deref() == Some(plugin)) {
+    // ML Studio renamed the built-in plugins ("ML X"); their pages keep the Lemon Studio names.
+    let renamed = match name {
+        "ML Sampler" => Some("Lemon Sampler".to_owned()),
+        "ML Citrus" => Some("Citrus".to_owned()),
+        "ML EQ" => Some("Lemon Parametric EQ".to_owned()),
+        "ML Pulp Filter" => Some("Pulp Filter".to_owned()),
+        "ML Press" => Some("Press".to_owned()),
+        "ML Tesla" => Some("Tesla".to_owned()),
+        _ => name.strip_prefix("ML ").map(|rest| format!("Lemon {rest}")),
+    };
+    match PLUGIN_PAGES.iter().find(|&&(plugin, _)| plugin == name || renamed.as_deref() == Some(plugin)) {
         Some((_, page)) => format!("{PLUGINS_URL}{page}/"),
         None => PLUGINS_URL.to_owned(),
     }
@@ -107,11 +115,9 @@ mod tests {
         let mut app = crate::app::App::new(None);
         let at = |label: &str| (0..20).find(|&i| item_at(HELP_MENU, i).is_some_and(|it| it.label == label)).unwrap();
         for (label, url) in [
-            ("Help index", super::HELP_INDEX_URL),
             ("Keyboard shortcuts", super::SHORTCUTS_URL),
             ("Troubleshooting", super::TROUBLESHOOTING_URL),
             ("Report a bug", super::REPORT_BUG_URL),
-            ("What's new", super::WHATS_NEW_URL),
             ("AQUILA website", super::WEBSITE_URL),
         ] {
             assert!(works(HELP_MENU, item_at(HELP_MENU, at(label)).unwrap()));
@@ -169,7 +175,9 @@ mod tests {
     /// Every plugin built into Lemon Studio has its page in the wiki; any other name gets the overview.
     #[test]
     fn built_in_plugins_have_their_pages() {
-        for a in crate::plugins::builtin().iter().chain(&crate::plugins::builtin_effects()) {
+        // ML Studio's own plugins have no page in Lemon Studio's wiki.
+        const NO_PAGE: [&str; 5] = ["ML Wave", "ML Plasma", "ML Chop", "ML Tape", "ML Hall"];
+        for a in crate::plugins::builtin().iter().chain(&crate::plugins::builtin_effects()).filter(|a| !NO_PAGE.contains(&a.desc.name.as_str())) {
             assert_ne!(super::plugin_page(&a.desc.name), super::PLUGINS_URL, "{}", a.desc.name);
         }
         assert_eq!(super::plugin_page(crate::container::CONTAINER), "https://getlemonstudio.app/wiki/plugins/tools/lemon-container/");

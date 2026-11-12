@@ -483,8 +483,10 @@ fn the_mixer_s_edits_are_undoable() {
         a.state.playlist.edit.as_mut().unwrap().text = "Drums".into();
         crate::playlist::commit_edit(&mut a.state);
     });
-    ui_round_trip(&mut a, "Mixer track reset", |a| {
+    ui_round_trip(&mut a, "Reset Mixer tracks to default", |a| {
         run(a, MCmd::Reset(1));
+        // AQUILA asks first (ML Studio's confirmation); Yes resets.
+        a.dialog_click(crate::dialog::DHit::Button(0));
     });
     crate::mixer::track_mut(&mut a.state, 3).unwrap().routes = vec![5];
     ui_round_trip(&mut a, "Mixer routing", |a| {

@@ -2063,7 +2063,7 @@ pub fn reorder(s: &mut State, from: u16, to: u16, remember: bool) {
 pub fn reorder_selected(s:&mut State,from:u16,to:u16){
     if locked(s, from) || selected(s).into_iter().any(|t| locked(s, t)) { return; }
  if from==0||to==0||from>inserts(s)||to>inserts(s)||s.rec.audio||s.rec.recording()||!s.mixer.recording.live.is_empty(){return;}
- let mut group=if is_selected(s,from){selected(s)}else{vec![from]};group.retain(|t|*t>0&&*t<=inserts(s));group.sort_unstable();group.dedup();if group.contains(&to){return;}
+ let mut group=if is_selected(s,from){selected(s)}else{vec![from]};group.retain(|t|*t>0&&*t<=inserts(s));group.sort_unstable();group.dedup();let group_len=group.len();if group.contains(&to){return;}
  let mut order:Vec<_>=(1..=inserts(s)).filter(|t|!group.contains(t)).collect();let Some(at)=order.iter().position(|t|*t==to)else{return};let at=at+usize::from(to>from);order.splice(at..at,group);
  if order.iter().enumerate().any(|(i, &t)| usize::from(t) != i + 1 && group_structure_locked(s, t)) {
     s.message = Some(LOCK_MESSAGE.into());
@@ -2072,7 +2072,7 @@ pub fn reorder_selected(s:&mut State,from:u16,to:u16){
  let arrangements=s.project.arrangements.clone();let lanes=s.project.instrument_lanes.clone();
  let mut current:Vec<_>=(1..=inserts(s)).collect();let mut moves=Vec::new();let(mut lo,mut hi)=(inserts(s),1);
  for i in 0..order.len(){if current[i]==order[i]{continue;}let j=current.iter().position(|t|*t==order[i]).unwrap();let(a,b)=((j+1)as u16,(i+1)as u16);moves.push((b,a));reorder(s,a,b,false);let v=current.remove(j);current.insert(i,v);lo=lo.min(a.min(b));hi=hi.max(a.max(b));}
- if !moves.is_empty(){sync_playlist_order(s,lo,hi);moves.reverse();crate::history::record(s,"Move selected mixer tracks",crate::history::Snap::MixerMoves{moves,arrangements,lanes});}
+ if !moves.is_empty(){sync_playlist_order(s,lo,hi);moves.reverse();crate::history::record(s,if group_len>1{"Move selected mixer tracks"}else{"Move mixer track"},crate::history::Snap::MixerMoves{moves,arrangements,lanes});}
 }
 
 /// Reorder linked rows as whole groups. Mixed-instrument rows and unrelated rows stay in place.
@@ -2690,7 +2690,7 @@ pub fn run(app: &mut App, c: MCmd) -> Option<String> {
         // The original's History names (spec: ui/one-click-recording.md §1).
         MCmd::AssignAudio(_) => Some(crate::track_links::ASSIGN_AUDIO),
         MCmd::UnassignAudio(_) => Some(crate::track_links::UNASSIGN_AUDIO),
-        MCmd::MoveLeft(_) | MCmd::MoveRight(_) => Some("Move mixer track"),
+        // Move left / right: the move records its own step (`reorder_selected`).
         MCmd::InsertOne(_) => Some(INSERT),
         MCmd::AddEffect(..) | MCmd::AddContainer(_) => Some("Add effect"),
         MCmd::SlotDelete(_) => Some("Remove effect"),
@@ -2723,10 +2723,7 @@ pub fn run(app: &mut App, c: MCmd) -> Option<String> {
 fn run_now(app: &mut App, c: MCmd) -> Option<String> {
     let at = app.mouse;
     let s = &mut app.state;
-    if let MCmd::Color(n,_)|MCmd::RandomColor(n)=c {
-        let snaps=targets(s,n).into_iter().filter_map(|t|track(s,t).map(|m|crate::history::Snap::TrackColor(t,m.color))).collect();
-        crate::history::record(s,"Mixer track color",crate::history::Snap::Several(snaps));
-    }
+    // Colour changes are one undo step through edit_app in run.
     let msg = match c {
         MCmd::RecordInput(..)|MCmd::ArmDisk(_)|MCmd::ToggleLock(_)|MCmd::ToggleGroupLock(_)=>None,
         MCmd::TuneSetting(n,k,v)=>{

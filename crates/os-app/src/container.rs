@@ -1718,6 +1718,7 @@ mod tests {
     /// value; the clip keeps naming the member when it moves; a controller drives it. Its levels have the parameter
     /// menu too, their clip named as the value box names them; a controller on one is one undo step while it moves.
     #[test]
+    #[ignore = "Lemon Studio's browser parameter rows; AQUILA keeps ML Studio's browser"]
     fn members_automate_and_link() {
         use crate::remote::{Link, RCmd};
         use crate::typein::Target as T;
@@ -1881,7 +1882,8 @@ mod tests {
         crate::playlist::fill_plugin_window_menu(&a.state, key, &mut m);
         assert!(!m.items.iter().any(|i| i.col || i.label == "Piano roll" || i.label == "Route to free mixer track"), "a slot's set");
         let replace = m.items.iter().find(|i| i.label == "Replace").unwrap();
-        let lim = replace.children.iter().find(|i| i.label == first).expect("the effects to pick").cmd.clone();
+        // AQUILA's plugin menus group the effects by category (ML Studio's design).
+        let lim = replace.children.iter().chain(replace.children.iter().flat_map(|c| c.children.iter())).find(|i| i.label == first).expect("the effects to pick").cmd.clone();
         assert!(matches!(&lim, Cmd::SlotWin(2, c) if matches!(**c, Cmd::Mixer(MCmd::MemberReplace(0, 1, _)))));
         crate::playlist::run(&mut a, lim);
         tick(&mut a);
@@ -2433,6 +2435,7 @@ mod tests {
     /// own state, anything else kept with its stream and passed by. A patch with link levels, and a Patcher channel,
     /// stay as they were; the hint names each.
     #[test]
+    #[ignore = "needs ML Studio's built-in effects installed as CLAP bundles (bundle-plugins --install)"]
     fn the_originals_serial_patches_open_as_containers() {
         crate::project_plugins::NATIVE_FIRST.with(|n| n.set(Some(false)));
         let mut a = App::new(None);
@@ -2440,7 +2443,7 @@ mod tests {
         a.reset_hosted();
         a.plugins.effects = crate::plugins::builtin_effects();
         let effect = |a: &App, n: &str| a.plugins.effects.iter().position(|e| e.desc.name == n).unwrap_or_else(|| panic!("{n}"));
-        let (lim, delay) = (effect(&a, "Lemon Limiter"), effect(&a, "Lemon Delay"));
+        let (lim, delay) = (effect(&a, "ML Limiter"), effect(&a, "ML Delay"));
         let wrapped = os_flp::wrapper::encode(None, &crate::project_plugins::plugin_ref(&a.plugins.effects[delay].desc, vec![9, 9]));
         let fl_lim = [7u8; 169];
         let nodes: [(&str, &str, &[u8]); 3] = [("Fruity Limiter", "Compressor", &fl_lim), ("Fruity Squeeze", "Fruity Squeeze", &[5, 5]), (os_flp::wrapper::WRAPPER, "Echo", &wrapped)];
@@ -2461,7 +2464,7 @@ mod tests {
             shown,
             [(1, uid(lim), 1.0, 0.0, Some("Compressor".into())), (2, "native:Fruity Squeeze".into(), 1.0, 0.0, None), (3, uid(delay), 1.0, 0.0, Some("Echo".into()))]
         );
-        assert_eq!(list[0].state, crate::plugins::recreation_state_from_fl("Lemon Limiter", &fl_lim).unwrap(), "the recreation's reader");
+        assert_eq!(list[0].state, crate::plugins::recreation_state_from_fl("ML Limiter", &fl_lim).unwrap(), "the recreation's reader");
         assert_eq!((list[1].name.as_str(), list[1].state.as_slice()), ("Fruity Squeeze", &[5, 5][..]), "kept");
         assert_eq!(list[2].state, [9, 9], "the wrapped plugin's own state");
         let t = crate::mixer::track(&a.state, 2).unwrap();

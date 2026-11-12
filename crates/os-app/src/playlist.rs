@@ -3335,7 +3335,10 @@ pub(crate) fn default_options_menu(s: &State, x: f32, y: f32) -> Popup {
         take("Edit"),take("Select"),take("Group"),PItem::sep(),take("Tool"),take("Snap"),
         PItem::sub("Clip options",vec![take("Audio clip options"),take("Automation editing"),take("Pattern note colors")]),
         PItem::sub("View",vec![take("Zoom"),take("Visible clip controls"),PItem::sub("Waveform detail when zoomed",["Standard","High","Maximum (sample detail)"].iter().enumerate().map(|(i,label)|PItem::new(*label,Cmd::WaveDetail(i as u8)).mark(Mark::Radio(detail==i as u8))).collect())]),
-        take("Time markers"),PItem::sep(),take("Tools"),PItem::sub("Track cleanup",vec![take("Reset empty playlist tracks")]),
+        take("Time markers"),PItem::sep(),take("Tools"),PItem::sub("Track cleanup",vec![take("Reset empty tracks")]),
+        take("Quantize song jumps"),PItem::sep(),
+        take("Prepare for performance mode"),take("Performance mode"),take("Performance clip progress"),
+        take("Performance track progress"),take("Ctrl+click triggers +Scene"),take("Velocity picks sub-clips"),
     ];
     Popup { x, y, items, sub: None, scroll: [0; 2], cascade: Vec::new() }
 }

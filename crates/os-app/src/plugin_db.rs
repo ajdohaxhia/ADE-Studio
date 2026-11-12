@@ -729,6 +729,7 @@ pub fn category(d: &Descriptor) -> &'static str {
         n if n == crate::osc3::LEMON_TRIO || n == crate::citrus::CITRUS || n == crate::smith::SMITH => return "Synth",
         n if n == crate::plugins::LEMON_EQ => return "EQ",
         "ML Master Assistant" | "Lemon Master Assistant" => return "Utility",
+        n if n == crate::plugins::LEMON_VOCODER => return "Modulation",
         _ => {}
     }
     let feats: Vec<String> = d.features.iter().map(|f| f.trim().to_lowercase()).collect();

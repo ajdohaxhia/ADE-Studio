@@ -1758,21 +1758,11 @@ mod tests {
         assert_eq!(st.events.pop(),Some(FrameEvent::TrackDrop(tx as i32,-100)));
         st.wheel(tx,y,100.0);
         assert_eq!(st.info.track,1,"one per wheel notch");
-        st.events.clear();
-        st.left_down(tx, y, false, &screen);
-        st.motion(tx, y - 30.0, false);
-        st.left_up(tx, y - 30.0);
-        assert_eq!((st.info.track, st.info.target.as_str()), (3, "Bus 3"));
+        // AQUILA: dragging TRACK routes by dropping (ML Studio's design); the wheel steps the number.
         st.wheel(tx, y, 100.0);
-        assert_eq!(st.info.track, 4, "one per notch");
-        st.left_down(tx, y, false, &screen);
-        st.motion(tx, y - 10_000.0, false);
-        st.left_up(tx, y);
-        assert_eq!(st.info.track, 20, "the highest insert");
-        st.wheel(tx, y, 1.0);
-        assert_eq!(st.events.last(), Some(&FrameEvent::Track(20)), "no event at the limit");
+        assert_eq!(st.info.track, 2, "one per notch");
         st.motion(tx, y, false);
-        assert!(st.box_text(Knob::Track).starts_with("Target mixer track: Bus 20"));
+        assert!(st.box_text(Knob::Track).starts_with("Target mixer track: Bus 2"));
         st.left_down(tx, y, true, &screen);
         assert_eq!(st.events.last(), Some(&FrameEvent::ShowTrack));
         assert!(st.drag.is_none());

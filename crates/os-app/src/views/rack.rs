@@ -1150,7 +1150,7 @@ fn add_button(ui: &mut Ui, x: f32, w: f32, bottom: f32) {
 }
 
 pub fn insert_name(track: u16) -> String {
-    if track == 0 { "Master".into() } else { format!("Insert {track}") }
+    if track == 0 { "Master".into() } else { format!("Bus {track}") }
 }
 
 /// The Advanced fill dialog (§22), drawn above everything while open.

@@ -3159,6 +3159,14 @@ impl App {
     /// Plugin host work on the UI thread: create / open requested plugins, apply plugin-window edits to the channel.
     pub(crate) fn plugin_tick(&mut self) {
         self.mpe_tick();
+        // Rows moved by an undone or redone channel edit kept by ML Studio's history (`State::rows_moved`): the
+        // instruments follow, the removed ones come back. Before the id pass below, which then finds them in place.
+        for (map, back) in std::mem::take(&mut self.state.rows_moved) {
+            self.remap_rows(&|r| map.get(r).copied().flatten());
+            for (row, index, blob) in back {
+                self.plugin_paste(row, index, &blob);
+            }
+        }
         // Instances follow their channels by id (an undo, a command), before rows are looked at.
         self.follow_ids(true, false);
         if std::mem::take(&mut self.state.retimed) {
@@ -9525,7 +9533,7 @@ impl App {
             let row = self.state.playlist.popup.as_ref().and_then(|menu| rack_delete_key(&menu.items));
             if let Some(row) = row {
                 self.state.playlist.popup = None;
-                crate::rack::delete_rows(self, &[row]);
+                crate::rack::delete_step(self, &[row]);
                 return;
             }
         }
@@ -11548,6 +11556,7 @@ impl App {
             MenuCmd::SaveMidiClip => self.save_midi_clipboard(),
             MenuCmd::SaveAudioClip => self.save_audio_clipboard(),
             MenuCmd::Diagnostics => self.save_diagnostics(),
+            MenuCmd::Collaborate => crate::collaboration::open(self),
             MenuCmd::CheckUpdates => self.check_updates_now(),
             MenuCmd::NewPattern => {
                 let at = crate::patterns::box_at_mouse(self.mouse);
@@ -11918,7 +11927,7 @@ fn lemon_or_flp(file: &mut os_flp::FlpFile, target: &std::path::Path, mut extra:
         os_flp::lemon::to_flp(file);
         return Ok(());
     }
-    extra.insert(0, os_flp::lemon::saved_by(&format!("Lemon Studio {}", crate::version::VERSION)));
+    extra.insert(0, os_flp::lemon::saved_by(&format!("{} {}", crate::version::NAME, crate::version::VERSION)));
     os_flp::lemon::to_lemon(file, &extra).map_err(|e| e.to_string())
 }
 
@@ -21058,10 +21067,10 @@ mod tests {
         app.act(Action::MenuItem(0, views::menus::FILE_SAVE));
         assert!(!app.unsaved(), "saved");
         app.act(Action::MenuItem(0, views::menus::FILE_SAVE_VERSION));
-        assert_eq!(app.state.path.as_deref(), Some(dir.join("Song_2.lemon").as_path()));
+        assert_eq!(app.state.path.as_deref(), Some(dir.join(format!("Song_2.{}", crate::project_files::EXT)).as_path()));
         app.act(Action::MenuItem(0, views::menus::FILE_SAVE_VERSION));
-        assert_eq!(app.state.path.as_deref(), Some(dir.join("Song_3.lemon").as_path()));
-        assert!(dir.join("Song_2.lemon").exists() && dir.join("Song_3.lemon").exists());
+        assert_eq!(app.state.path.as_deref(), Some(dir.join(format!("Song_3.{}", crate::project_files::EXT)).as_path()));
+        assert!(dir.join(format!("Song_2.{}", crate::project_files::EXT)).exists() && dir.join(format!("Song_3.{}", crate::project_files::EXT)).exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

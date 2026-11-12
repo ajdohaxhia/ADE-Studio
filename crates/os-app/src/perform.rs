@@ -1010,6 +1010,8 @@ mod tests {
     fn typing_keys_launch_slots() {
         use winit::keyboard::KeyCode::*;
         let mut app = app();
+        // AQUILA starts with the typing keyboard off (ML Studio's default); switch it on.
+        if !app.typing_on() { app.state.toggles.push("typing"); }
         assert!(app.typing_on());
         assert!(app.typing_key(Digit2, true, false, false));
         let l = &app.state.playlist.perform.live[&0];
