@@ -427,3 +427,48 @@ Full list with messages: `/Volumes/aquilabuild/work/base-msgs.txt`. About 13 are
   2. `rsync -a --delete --exclude .git --exclude target /Volumes/aquilabuild/mltree/ /Volumes/aquilabuild/tree/`. ML Plasma's CMake cache needs the `/Volumes/aquilabuild/tree` path.
   3. Run cargo there with the same environment as `chk.sh`.
   4. Remove the worktree afterwards. The next `chk.sh` run syncs AQUILA back.
+
+## 12. Lemon Studio's 41 new commits merged (2026-11-13)
+
+ML Studio had nothing new. Lemon Studio `main` had moved from `415eaf26` to `011a03f2` (41 commits: playlist bars
+following the time signature, stacked edges on overlapping notes and clips, FL-style gestures, Make unique for audio
+clips, Consolidate / Export tracks rendering hosted plugins, per-pattern rack loops, undo fixes, the equivalence
+harness in `crates/os-app/src/equiv.rs`). 58 conflicts in 10 files.
+
+### Choices made
+
+- **Rack loops per pattern:** Lemon Studio's mechanism (`rack.loops_of`, `follow_pattern`, `load_loops`,
+  `store_loops`) replaces ML Studio's `read_loops` / `write_loops`. `play_project` keeps ML Studio's expansion of every
+  pattern's loops, with `loops_of` as the pattern the rack holds. `pattern_seen` is still used by `pattern_tick` for
+  auto-collapse and channel selection only.
+- **Playlist ruler and grid lines:** drawn from `pl::Bars` (Lemon Studio), keeping ML Studio's snap-sized grid lines
+  and vintage ruler digits.
+- **Playlist Select tool:** ML Studio's stays. Lemon Studio's Shift-toggle box and right-click-clears-selection were
+  not taken, so `PlDrag::Marquee` has no `toggle` field. The test `playlist_tool_wheel_and_select_box` became
+  `playlist_tool_wheel`, written against ML Studio's toolbar order.
+- **Playlist solo:** `solo_in_effect` now compares against `solo_keep` (ML Studio's folder / group aware set), so a
+  solo that no longer holds ends without putting old states back.
+- **Clip painting:** ML Studio's translucent bodies and stroked outlines stay; Lemon Studio's `see` closure for
+  automation clips is unused.
+- **Exports:** `App::start_export_of(job, p, song)` (Lemon Studio's name) forwards to ML Studio's
+  `start_project_export(p, job, song)`.
+- **Equivalence harness:** `Transport::sent_for_tests` returns `None`. ML Studio's transport hands updates to the
+  audio thread through a slot it empties and keeps no copy, so the harness's "engine holds the project" check is off.
+- **Undo of a pattern edit** no longer switches the pattern shown (Lemon Studio's change).
+- `Snap::Knob` holds `Option<f64>`; `history::knob_value` returns `Option<f64>`.
+
+### Test status
+
+`newfail.sh --workspace --lib --bins --tests --no-fail-fast` before the last three fixes: 3076 passed, 103 failed,
+140 ignored, with 3 new failures, all in os-app. After fixing them, `newfail.sh -p os-app --bins`: 1466 passed, 90
+failed, 107 ignored, and the failures outside the baseline are the same 15 as in section 11. The full workspace was
+not rerun after those three fixes.
+
+Use `--lib --bins --tests`: a bare `--workspace` also builds `plugins/lemon-wave/examples/verify_host.rs`, which does
+not compile.
+
+### Still open
+
+- Windows-only code is not compiled.
+- `packaging/github-release.json` still links ML Studio's binaries; there are no AQUILA builds to link.
+- ML Studio's batched parameter polling is not ported.

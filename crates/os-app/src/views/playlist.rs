@@ -21,6 +21,8 @@ pub const BAR_W: f32 = 60.0;
 // Clip colours (spec: ui/playlist.md §2).
 const CLIP_BORDER: u32 = 0x353c41;
 const TITLE_TOP: u32 = 0x50595e;
+/// How much of an automation clip's body covers what lies under it (`clip_paint`).
+const AUTO_ALPHA: u8 = 130;
 const TITLE_BOTTOM: u32 = 0x3f494d;
 const TITLE_TEXT: u32 = 0xd6dfe4;
 const SEL_TITLE: u32 = 0x75201f;
@@ -294,13 +296,17 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
     let g = PGeom::new(s, grid);
     let (sx, sy) = s.playlist_scroll;
     let bar_w = s.playlist_bar_w;
+    // The zoom counts in four quarter notes (`bar_t`), whatever the time signature; the song's extent is counted in
+    // the project's bars.
     let bar_t = (g.ppq * 4) as f32;
+    let proj_bar = s.project.bar_ticks() as f32;
 
     // Overview (horizontal scroll bar with a miniature of the clips) + ruler. The song extends 16 bars past
     // its last clip, at least 100 bars; 500 tracks.
-    let last = pl::clips(s).iter().map(|c| c.end() as f32 / bar_t).fold(0.0, f32::max);
+    let last = pl::clips(s).iter().map(|c| c.end() as f32 / proj_bar).fold(0.0, f32::max);
     // A finite content-derived end: navigating to it must not move the goalpost.
     let bars = if crate::elastic_scroll::adaptive(crate::app::Scroll::PlaylistX) {last.ceil().max(grid_w/bar_w)} else {(last.ceil() + 16.0).max(100.0).max((sx + grid_w) / bar_w)};
+    let bars = bars * proj_bar / bar_t;
     let (_, vbar) = bar_sizes();
     let over = overview_rect(s, grid);
     super::scrollbar(ui, over, false, sx, grid_w, bars * bar_w, crate::app::Scroll::PlaylistX);
@@ -411,7 +417,8 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
         let x = g.x_of(p as f32).clamp(grid_x, grid.right());
         ui.c.fill_rect(Rect::span(grid_x, x, grid.y, grid.bottom()), t.s(0x000000).with_alpha(70));
     }
-    grid_lines(ui, &g, bar_w, start_bar(&g, start), pl::grid_snap(s));
+    let bars = pl::Bars::new(s);
+    grid_lines(ui, s, &g, &bars, start_bar(&bars, start), pl::grid_snap(s));
     for &row in &visible {
         let (y, h) = (g.y_of(row), g.rows.height(row));
         // The gap line at the theme's line strength (spec: ui/flstheme.md §3, PLGridContrast).
@@ -440,6 +447,7 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
             }else if ui.c.visible(g.clip_rect(c).outset(2.0)){clip_paint(ui,s,&g,i,c,brightness,show_waveforms);}
         }
     }
+    stack_edges(ui, s, &g, grid);
     crate::drop_preview::paint(ui,s,&g);
     for live in &s.mixer.recording.live {
         let x=g.x_of(live.start as f32);
@@ -649,8 +657,8 @@ fn overview(ui: &mut Ui, s: &State, inner: Rect, total_ticks: f32, classic: bool
 }
 
 /// The bar the Start marker is in (0 without one): bars count from it (§7a).
-fn start_bar(g: &PGeom, start: Option<u32>) -> i32 {
-    start.map_or(0, |p| (p / (g.ppq * 4).max(1)) as i32)
+fn start_bar(bars: &pl::Bars, start: Option<u32>) -> i32 {
+    start.map_or(0, |p| bars.index(p))
 }
 
 /// Bar numbers, time selection, song position (§7).
@@ -667,28 +675,29 @@ fn ruler_paint(ui: &mut Ui, s: &State, g: &PGeom, ruler: Rect, f: &FrameInfo) {
     // Bars count from the Start marker (§7a): "1" on its bar; before it the ruler is darker and the bars have no
     // numbers.
     let start = pl::start_marker(s);
-    let sb = start_bar(g, start);
+    let bars = pl::Bars::new(s);
+    let sb = start_bar(&bars, start);
     if let Some(p) = start {
         let x = g.x_of(p as f32).clamp(ruler.x, ruler.right());
         ui.c.fill_rect(Rect::span(ruler.x, x, ruler.y, ruler.bottom()), offset(face, -8));
     }
-    let bar_w = g.bar_w;
-    let every = label_step(bar_w);
+    // Labels by the project's bar width; the song's bars follow the time-signature markers (`pl::Bars`).
+    let every = label_step(s.project.bar_ticks() as f32 * g.ppt);
     // From the bars whose numbers still reach into view (a number is up to ~40 px wide): which labels are drawn must
     // not depend on the scroll position, or a scrolled ruler would differ from a repainted one.
-    let first_bar = ((g.scroll_x - 48.0) / bar_w).floor().max(0.0) as i32;
-    let last_bar = ((g.scroll_x + ruler.w) / bar_w).ceil() as i32 + 1;
+    let t0 = ((g.scroll_x - 48.0) / g.ppt).max(0.0) as u32;
+    let t1 = ((g.scroll_x + ruler.w) / g.ppt).max(0.0) as u32 + 1;
     let digits = Font { width: 5, ..Font::vintage(11) };
     let number_y = if vintage {
         (ruler.bottom() - 2.0 - (15.0 + ui.c.line_height(digits)) * 0.5)
             .max(ruler.y + 1.0)
     } else { ruler.y };
-    for b in first_bar.max(sb)..last_bar {
+    for (b, tick, _) in bars.lines(t0, t1) {
         let n = b - sb;
-        if n % every != 0 {
+        if n < 0 || n % every != 0 {
             continue;
         }
-        let x = g.xs(f64::from(b) * f64::from(bar_w));
+        let x = g.xs(f64::from(tick) * f64::from(g.bar_w) / f64::from(g.ppq * 4));
         let major = n % (every * 4) == 0;
         let label = (n + 1).to_string();
         if vintage {
@@ -820,44 +829,46 @@ pub(crate) fn marker_label(m: &TimeMarker) -> String {
 
 /// Vertical lines: grid units (dim), beats, bars (bright); every fourth bar group tinted, counted from bar `sb` (the
 /// Start marker's, §7a).
-fn grid_lines(ui: &mut Ui, g: &PGeom, bar_w: f32, sb: i32, snap: pl::Snap) {
+fn grid_lines(ui: &mut Ui, s: &State, g: &PGeom, bars: &pl::Bars, sb: i32, snap: pl::Snap) {
     let t = ui.t;
     let grid = g.grid;
+    let bar_w = g.bar_w;
+    // A bar's width is the project's (the time signature); bars of another length follow its markers (`pl::Bars`).
+    let pb = s.project.bar_ticks() as f32 * g.ppt;
     let mut bar_step = 1;
-    while bar_w * (bar_step as f32) < 8.0 {
+    while pb * (bar_step as f32) < 8.0 {
         bar_step *= 2;
     }
-    let first_bar = ((g.scroll_x / bar_w) as i32 / bar_step) * bar_step;
-    let n = (grid.w / bar_w).ceil() as i32 + bar_step + 1;
     // Lines at the theme's line strength (spec: ui/flstheme.md §3, PLGridContrast).
     let beat = t.pl_line(t.grid_gap.mix(t.grid, 0.4));
     let bar_line = t.pl_line(t.grid_bar);
-    let ticks = if snap == pl::Snap::None { pl::grid_ticks(g.ppq, bar_w) } else { snap.ticks(g.ppq, bar_w) };
-    let unit = f64::from(ticks) * f64::from(g.ppt);
-    let beat_ticks = i64::from(g.ppq);
-    let bar_ticks = 4 * beat_ticks;
-    // Bar b's x on the drawing grid (`PGeom::xs`), plus `d` content pixels.
-    let bar_x = |b: i32, d: f32| g.xs(f64::from(b) * f64::from(bar_w) + f64::from(d));
-    let mut b = first_bar;
-    while b < first_bar + n {
-        let x = bar_x(b, 0.0);
-        if (b - sb).div_euclid(4).rem_euclid(2) == 1 {
-            ui.c.fill_rect(Rect::new(x, grid.y, bar_x(b + bar_step, 0.0) - x, grid.h), t.grid_alt.with_alpha(160));
+    let unit_t = if snap == pl::Snap::None { pl::grid_ticks(g.ppq, bar_w) } else { snap.ticks(g.ppq, bar_w) };
+    let ref_t = g.ppq * 4;
+    // The snap's unit while its lines stand 5 px apart, else beats (and none closer than that).
+    let stride = if unit_t as f32 * g.ppt >= 5.0 { unit_t.max(1) } else { g.ppq };
+    let fine = stride as f32 * g.ppt >= 5.0;
+    // Content x of `tick` (`PGeom::xs`): the same exact products as bars counted from 0 in 4/4.
+    let tick_x = |tick: u32, d: f32| g.xs(f64::from(tick) * f64::from(bar_w) / f64::from(ref_t) + f64::from(d));
+    let t0 = (g.scroll_x / g.ppt).max(0.0) as u32;
+    let t1 = ((g.scroll_x + grid.w) / g.ppt).max(0.0) as u32 + 1;
+    for (b, at, len) in bars.lines(t0, t1) {
+        if b.rem_euclid(bar_step) != 0 {
+            continue;
         }
-        if bar_step == 1 && i64::from(ticks) < bar_ticks {
-            let stride = if unit >= 5.0 { i64::from(ticks) } else { beat_ticks };
-            if stride as f32 * g.ppt >= 5.0 {
-                let start = i64::from(b) * bar_ticks;
-                let first = start.div_euclid(stride) * stride + stride;
-                for tick in (first..start + bar_ticks).step_by(stride as usize) {
-                    let c = if tick % beat_ticks == 0 { beat } else { beat.mix(t.grid, 0.5) };
-                    let x = bar_x(b, (tick - start) as f32 * g.ppt);
-                    ui.c.fill_rect(Rect::new(x, grid.y, 1.0, grid.h), c);
-                }
+        let x = tick_x(at, 0.0);
+        if (b - sb).div_euclid(4).rem_euclid(2) == 1 {
+            let next = if bar_step == 1 { at + len } else { bars.floor(at + len * bar_step as u32).max(at + len) };
+            ui.c.fill_rect(Rect::new(x, grid.y, tick_x(next, 0.0) - x, grid.h), t.grid_alt.with_alpha(160));
+        }
+        if bar_step == 1 && unit_t < ref_t && fine {
+            let mut q = 1;
+            while q * stride < len {
+                let c = if (q * stride) % g.ppq == 0 { beat } else { beat.mix(t.grid, 0.5) };
+                ui.c.fill_rect(Rect::new(tick_x(at, (q * stride) as f32 * g.ppt), grid.y, 1.0, grid.h), c);
+                q += 1;
             }
         }
         ui.c.fill_rect(Rect::new(x, grid.y, if bar_step == 1 { 2.0 } else { 1.0 }, grid.h), bar_line);
-        b += bar_step;
     }
 }
 
@@ -869,6 +880,42 @@ fn offset(c: Color, d: i16) -> Color {
 
 /// One clip (§2): a near-black outline with rounded top corners, the title strip (pattern clips neutral, audio and
 /// automation clips in their channel's colour), the body in the track's colour, then the content.
+/// Clips of one track at once (a copy laid on another, or two overlapping in part): each lies on the ones before it,
+/// whose edges show as a stack above it over the time they share, a 2 px layer for each clip under it, three at most,
+/// as the piano roll's notes. The clips keep their places; only the layers tell that more lie there.
+fn stack_edges(ui: &mut Ui, s: &State, g: &PGeom, grid: Rect) {
+    const LAYER: f32 = 2.0;
+    const MOST: usize = 3;
+    let t = ui.t;
+    // Clips in view, by track, in painting order (a collapsed group's strip shows none).
+    let mut tracks: std::collections::BTreeMap<u16, Vec<Rect>> = std::collections::BTreeMap::new();
+    for c in pl::clips(s).iter().filter(|c| !g.rows.strip(c.track)) {
+        let r = g.clip_rect(c);
+        if r.right() > grid.x && r.x < grid.right() && r.bottom() > grid.y && r.y < grid.bottom() {
+            tracks.entry(c.track).or_default().push(r);
+        }
+    }
+    let (rim, face) = (cc(t, CLIP_BORDER), cc(t, TITLE_TOP));
+    for rects in tracks.values().filter(|v| v.len() > 1) {
+        for (a, r) in rects.iter().enumerate() {
+            let mut layer = 0;
+            for under in rects[..a].iter().rev() {
+                let (x0, x1) = (r.x.max(under.x) + 1.0, r.right().min(under.right()) - 1.0);
+                if x1 - x0 < 1.0 {
+                    continue;
+                }
+                layer += 1;
+                let y = r.y - LAYER * layer as f32;
+                ui.c.fill_rect(Rect::new(x0, y, x1 - x0, 1.0), rim);
+                ui.c.fill_rect(Rect::new(x0, y + 1.0, x1 - x0, LAYER - 1.0), face);
+                if layer == MOST {
+                    break;
+                }
+            }
+        }
+    }
+}
+
 fn clip_paint(ui: &mut Ui, s: &State, g: &PGeom, i: usize, c: &Clip, brightness: f32, show_waveforms: bool) {
     let take=crate::comping::parent(s,c.track).is_some();
     let muted=c.muted && !take;
@@ -978,6 +1025,8 @@ fn clip_paint(ui: &mut Ui, s: &State, g: &PGeom, i: usize, c: &Clip, brightness:
     let body_alpha=|c:Color| c.with_alpha((48.0 + 64.0 * brightness).round() as u8);
     let narrow = r.w < 8.0;
     let lemon = super::lemon(ui);
+    // An automation clip's body lets the clips under it show through; its title strip stays solid.
+    let see = |col: Color| if kind == PickKind::Automation { col.with_alpha(AUTO_ALPHA) } else { col };
     // Rect fills with the top corners knocked out (cheaper than rounded paths for hundreds of clips).
     if lemon {
         ui.c.stroke_rrect(r, lk::r_btn(t).min(r.w / 2.0).min(r.h / 2.0), 1.0, outline);
@@ -1418,7 +1467,7 @@ fn curve(ui: &mut Ui, s: &State, g: &PGeom, i: usize, c: &Clip, ch: u16, edges: 
                 continue;
             }
             let py = pl::value_y(body, p.value);
-            ui.c.fill_circle(px, py, 4.0, if selection.is_some_and(|(_, points)| points.contains(p)) { col } else { bg });
+            ui.c.fill_circle(px, py, 4.0, if selection.is_some_and(|(_, points)| points.contains(p)) { col } else { bg.with_alpha(255) });
             ui.c.stroke_circle(px, py, 4.0, 1.5, col);
             if k > 0 {
                 let q = a.points[k - 1];
@@ -1550,7 +1599,7 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
     ui.c.fill_rect(Rect::new(toggle.x+if active.is_some(){10.0}else{2.0},toggle.y+2.0,6.0,6.0),if active.is_some(){ui.t.tx(0x253039)}else{t.text});
     let hot = ui.hit(auto, Action::PlAutomation(row), hint);
     clip_kind_icon(ui, PickKind::Automation, auto.inset(1.0), crate::attached_mixer::lane_icon(s,row,hot).unwrap_or(if active.is_some() || hot { t.glyph } else { t.text_faint }));
-    ui.hit(led, Action::PlLed(row), "Mute track (right-click / Ctrl+click: solo)");
+    ui.hit(led, Action::PlLed(row), "Mute track (right-click / Ctrl+click: solo; with Alt: the whole group)");
     crate::vocal::head(ui,s,row,Rect::new(hr.x+27.,led.y,17.,14.));
     crate::warp::head(ui,s,row,Rect::new(hr.x+47.,led.y,14.,14.));
     crate::attached_mixer::record_button(ui,s,row,Rect::new(led.x-if lead{45.}else{27.},led.cy()-7.,22.,14.));

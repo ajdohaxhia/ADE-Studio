@@ -43,6 +43,8 @@ mod dropout_log;
 #[cfg(test)]
 mod checks;
 #[cfg(test)]
+mod equiv;
+#[cfg(test)]
 mod open_bench;
 mod browser;
 mod browser_files;
@@ -1236,6 +1238,7 @@ impl ApplicationHandler for Shell {
                 self.pending = true;
             }
             WindowEvent::MouseInput { state: ElementState::Released, button: button @ (MouseButton::Right | MouseButton::Middle), .. } => {
+                self.app.right_down &= button != MouseButton::Right;
                 if crate::input_bindings::accepts_release(&self.app,if button==MouseButton::Right {1}else{2}) {
                     self.unlock_cursor();
                     self.app.mouse_up_from(None);
@@ -1355,6 +1358,7 @@ impl ApplicationHandler for Shell {
                 if !focused {
                     self.grab = None;
                     self.unmax = None;
+                    self.app.right_down = false;
                     self.app.typing_release_all();
                     self.app.cancel_mouse_audition();
                     window.request_redraw();

@@ -668,6 +668,20 @@ impl Transport {
         self.shared.loop_range.store(packed, Ordering::Relaxed);
     }
 
+    /// Tests: how many times playback was started or stopped (the equivalence harness).
+    #[cfg(test)]
+    pub fn generation_for_tests(&self) -> u64 {
+        self.shared.generation.load(Ordering::Acquire)
+    }
+
+    /// Tests: Lemon Studio's transport keeps the project it last sent the engine; AQUILA's (ML Studio's) hands each
+    /// update to the audio thread through a slot it empties, so there is no copy to compare and the equivalence
+    /// harness leaves its engine check out.
+    #[cfg(test)]
+    pub fn sent_for_tests(&self) -> Option<Project> {
+        None
+    }
+
     /// Replace the playing project, continuing from the current position.
     pub fn update(&self, project: &Project) {
         self.update_with_warp(project, None);

@@ -383,7 +383,7 @@ impl App {
             Msg::Cc { ch: 0, n: n @ 16..=23, v } => {
                 let t = track(n - 16);
                 let delta = f32::from(v & 63) / 127.0 * if v & 64 != 0 { -1.0 } else { 1.0 };
-                let current = crate::history::knob_value(&self.state, crate::knobs::KnobId::MixPan(t)) as f32;
+                let current = crate::history::knob_value(&self.state, crate::knobs::KnobId::MixPan(t)).unwrap_or(0.0) as f32;
                 self.surface_pan(t, current + delta);
             }
             _ => {}
