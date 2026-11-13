@@ -545,3 +545,11 @@ Full workspace: 3136 passed, 96 failed, 141 ignored, before the "Bus 11" fix (th
 baseline: the 16 of section 13 plus `plugin_downloads::tests::catalog_browser_search_and_layout`. That test searches
 the catalogue for a plugin (oXygen) that has no macOS arm64 download, so it cannot pass on this machine; it was not
 run against a clean ML Studio build.
+
+### Update (same day): the guide says AQUILA
+
+`docs/user-guide.md` (shown in the app's Help window) now says "AQUILA" where it said "ML Studio", topic titles and
+their "Related:" links included, and its install topic points to https://github.com/ajdohaxhia/ADE-Studio instead of
+ML Studio's download page. A later merge of ML Studio's guide will conflict wherever those lines change: take theirs
+and repeat the replacement. os-app tests after the change: 1515 passed, 85 failed, the failures outside the baseline
+unchanged.

@@ -1,4 +1,4 @@
-# ML Studio User Guide
+# AQUILA User Guide
 
 ## Start here
 Overview: Install, set up audio, and make your first song.
@@ -35,10 +35,10 @@ Press Ctrl+K or Ctrl+F to focus search, then enter a feature, shortcut or task. 
 
 Use Detach at the top of the guide to open a resizable native window. Drag its title bar to another monitor and keep editing the project in the main window. Use Dock to return to the app. Close hides the guide, and Help > User Guide reopens it in its last mode. Workspace Visibility > Help can hide the Detach button.
 
-### Install and open ML Studio
+### Install and open AQUILA
 Keywords: download install Windows macOS Apple silicon Intel Linux update .lmn first launch
-Get the installer or archive for your operating system and processor from the official ML Studio downloads page, https://michaellanemusic.de/ml-studio/. Windows uses the installer. On macOS, choose Apple silicon or Intel, then place the application in a writable Applications folder. On Linux x86-64, extract the full archive into a writable folder and launch ML Studio from it.
-1. Start ML Studio and open Options > Audio settings. Pick your interface or built-in output.
+Get the installer or archive for your operating system and processor from the AQUILA project page, https://github.com/ajdohaxhia/ADE-Studio. Windows uses the installer. On macOS, choose Apple silicon or Intel, then place the application in a writable Applications folder. On Linux x86-64, extract the full archive into a writable folder and launch AQUILA from it.
+1. Start AQUILA and open Options > Audio settings. Pick your interface or built-in output.
 2. Use File > New from template to choose a starting workspace. Lemon Starter is the supplied starting template.
 3. Use Help > About to identify your build. Help > Change Log lists the installed release history. When a signed update is available, the update control downloads it and offers a restart.
 Related: Make your first song | Set up an audio device | Report a problem and check for updates
@@ -98,7 +98,7 @@ Guide: midi
 Open Settings > MIDI, select an input device, enable it and choose its Controller type. This choice is saved separately for each device in your profile.
 For musical keys and pads, choose Generic MIDI / MIDI Learn. Use the input role to separate an instrument port from a dedicated DAW controls port. Use Instruments + controls when a keyboard has one shared port. Right-click a software knob, choose Link to controller, then move the hardware control. For an endless encoder, choose the Relative mode that matches its MIDI format.
 Under DAW MIDI Learn, select an action and press a hardware button on the selected input. Single press mode suits CC buttons that send no release. Save Learn preset exports the actions and button behavior to a file. Load Learn preset applies that file to the selected input and replaces its learned actions.
-For a controller with Mackie Control Universal support, set its hardware mode to MCU, select its dedicated DAW input in ML Studio, and choose Mackie Control or the matching named MCU profile. Profiles include Kontrol, KeyLab, X-Touch, Oxygen Pro, nanoKONTROL Studio, SSL UF1/UF8 and iCON QCon. Use the hardware's matching Mackie mode. Select the dedicated DAW output in the output list, then click Pair selected output. Hardware with compatible motor faders, button LEDs, pan rings or track-name displays receives feedback over that output.
+For a controller with Mackie Control Universal support, set its hardware mode to MCU, select its dedicated DAW input in AQUILA, and choose Mackie Control or the matching named MCU profile. Profiles include Kontrol, KeyLab, X-Touch, Oxygen Pro, nanoKONTROL Studio, SSL UF1/UF8 and iCON QCon. Use the hardware's matching Mackie mode. Select the dedicated DAW output in the output list, then click Pair selected output. Hardware with compatible motor faders, button LEDs, pan rings or track-name displays receives feedback over that output.
 For Launchkey MK4, select its native profile on the DAW input and pair the DAW output to enter DAW mode. Its DAW pads select and mute Mixer inserts, and its mixer encoders and available faders control pan and level. Keep the instrument port available for playing keys. The nanoKONTROL2 factory profile uses CC mode. For Akai and other controllers configured to transmit MIDI Machine Control, choose the MMC profile to receive transport commands alongside notes.
 If notes work but transport does not, turn on the MIDI Monitor and check whether pressing a button generates a message on the selected DAW port. If an input shows in use, close the other application using that MIDI port. Use Refresh device list after connecting hardware.
 Hide the setup controls under Settings > General > Workspace Visibility > Input customization > MIDI controller setup. Saved modes and mappings continue to operate when the controls are hidden.
@@ -106,7 +106,7 @@ Hide the setup controls under Settings > General > Workspace Visibility > Input 
 ### Use MIDI, typing keyboard and step entry
 Keywords: step edit typing keyboard controllers performance
 Guide: typing
-Enable Typing keyboard to piano in the toolbar or press Ctrl+T. ML Studio remembers the switch in your profile when you quit and reopen. Notes go to the selected instrument. Use numpad + and - to shift the keyboard by octaves. Right-click the typing-keyboard button and choose Octave to set the base octave directly, including on keyboards without a numpad. The octave is saved per profile; 4 is the default. Octave changes apply to new notes, so held notes still release at their original pitch. Settings > Visibility > Input customization can hide the octave menu without changing the setting.
+Enable Typing keyboard to piano in the toolbar or press Ctrl+T. AQUILA remembers the switch in your profile when you quit and reopen. Notes go to the selected instrument. Use numpad + and - to shift the keyboard by octaves. Right-click the typing-keyboard button and choose Octave to set the base octave directly, including on keyboards without a numpad. The octave is saved per profile; 4 is the default. Octave changes apply to new notes, so held notes still release at their original pitch. Settings > Visibility > Input customization can hide the octave menu without changing the setting.
 Right-click the toolbar button to choose Key and Scale or Follow Piano Roll typing snap. For a selected scale, the letter rows play successive scale notes and each row starts one octave above the previous row. On a German QWERTZ keyboard, the bottom row runs from Y through minus and the home row from A through Ä. The corresponding QWERTY ranges are Z through slash and A through apostrophe. Choose Chromatic for the staggered piano-key layout with black keys on the row above.
 Turn typing off to use the same unmodified keys for editing shortcuts. Text fields take text normally and modified keyboard shortcuts keep their own bindings.
 Use Step Edit with playback stopped to enter notes one step at a time. Check the selected channel, current position and snap before entering notes.
@@ -491,7 +491,7 @@ Related: Choose the Mixer layout and built-in strip | Add, reorder and bypass ef
 Keywords: SSL 360 Link VST3 wrapper third party channel strip mapping setup scan Solid State Logic
 Install the free SSL 360 Link VST3 from Solid State Logic separately. Open Settings > Plugins > Find new plugins. In Mixer > Channel Strip view, click a strip's + or open its strip menu, then Choose channel strip > Solid State Logic > SSL 360 Link. It appears after a successful scan. The setup article remains available from the strip menu even before installation.
 In Link, open Configure Link > PLUG-INS, scan for your installed VST3 effects and load one. Use a factory map when available, or make a user map in Link. Link hosts VST3 effects, not instruments. Factory maps cover selected plugins; arbitrary effects are not automatically mapped. See SSL's SSL 360 Link User Guide for its mapping workflow.
-The Mixer displays Link's actual editor and controls. Its full interface remains accessible, including its plugin browser and mapping pages. Use Link's zoom control if needed. ML Studio's built-in strip knobs are not automatically mapped to the wrapped plugin. Available controls, metering and processing depend on Link and the loaded effect.
+The Mixer displays Link's actual editor and controls. Its full interface remains accessible, including its plugin browser and mapping pages. Use Link's zoom control if needed. AQUILA's built-in strip knobs are not automatically mapped to the wrapped plugin. Available controls, metering and processing depend on Link and the loaded effect.
 To configure in a separate window, choose Open strip in plugin window; its D button detaches it for another monitor. Choose Dock original interface here to bring it back. Use an existing effect can dock a Link instance already in that insert's effect slots.
 Save the project to retain the wrapper's saved state. Copy this rack and settings to all inserts creates independent plugin instances using the wrapper's state; Fill all insert channels with starts fresh instances. These operations need a free effect slot on each destination. Remove strip (keep bypassed effect) restores the built-in strip and keeps the effect bypassed. Undo restores the assignment. Keep Link, the hosted plugin and any user maps installed when moving projects between computers.
 Settings > Visibility > Mixer > SSL 360 Link in Channel Strip picker hides the picker entry and setup shortcut without changing loaded effects or project data.
@@ -508,7 +508,7 @@ Related: Save and reuse effect chains | Audio processing and recording settings
 ### Read signal levels, latency and plugin load
 Keywords: meters rms peak clip gain staging pdc compensation performance monitor smart disable
 Watch the insert and Master meters before adjusting individual processors. Reduce the upstream gain if a stage is clipping. A downstream fader can lower the output without undoing clipping inside an effect.
-ML Studio compensates playback paths for latency reported by hosted plugins. Large look-ahead, oversampling and linear-phase processing can increase monitoring delay. Use the plugin performance monitor to locate heavy instruments and effects, and bypass a suspect processor while reproducing a dropout.
+AQUILA compensates playback paths for latency reported by hosted plugins. Large look-ahead, oversampling and linear-phase processing can increase monitoring delay. Use the plugin performance monitor to locate heavy instruments and effects, and bypass a suspect processor while reproducing a dropout.
 If an effect has a heavy UI, compare playback with its window closed. Freeze tracks when instrument processing is the bottleneck. Bounce when you want to commit mixer processing into a new audio file.
 Related: Fix delay, crackles or no sound | Freeze or bounce a track
 
@@ -564,7 +564,7 @@ Direct downloads are checked against the catalog checksum before opening. Cancel
 ### Browse samples, favorites and the Starter Pack
 Keywords: browser samples favorites search tags folders preview volume loop normalize start pack download cc0
 Open the Samples tab and use Add my sample folder or drag a folder into the Browser. Search and filter your library, star items for Favorites, and audition a highlighted file with Right Arrow. Preview volume and its assigned Mixer route affect listening while browsing. Drag the sound to the Channel Rack to play it as an instrument or to the Playlist to arrange audio.
-Use Download ML Studio Starter Pack for the optional collection of 263 CC0 WAVs, including drums, loops, keys, vocal hits and textures. The download starts from that button, can be cancelled, and appears as a Browser library after verification. The samples and download cache together take about 570 MiB.
+Use Download AQUILA Starter Pack for the optional collection of 263 CC0 WAVs, including drums, loops, keys, vocal hits and textures. The download starts from that button, can be cancelled, and appears as a Browser library after verification. The samples and download cache together take about 570 MiB.
 Dropping audio files into the Samples Browser adds references to their current locations. Keep the original files available. Add or remove library roots under Settings > File. Use the Browser's menu to detach it for a second monitor or dock it back into the main window.
 Guide: browser
 Related: Browse samples and release history | Discover free plugins
@@ -713,11 +713,11 @@ For the best result, close the cleanup panel, select at least 100 ms of backgrou
 
 Start with 12 dB Reduction and 1.50x Sensitivity. Higher Reduction permits stronger attenuation; higher Sensitivity identifies more audio as noise. Click **Preview cleaned** to render and listen. A progress bar appears while processing; Close/Escape cancels processing without editing the sample. Use **Original**, **Preview cleaned** and **Stop** to compare. Preview never changes the document or saved project. Tesla temporarily suppresses its incoming mixer audio during these previews so it does not double up with the audition.
 
-**Apply cleanup** commits the result inside Tesla with one undo step. If you continue editing afterward, the yellow **Apply to track** button at the bottom of Tesla (also in its File menu) returns the edited sample without running denoise again. **Apply to track**, available only when opened from a ML Studio clip, writes a separate cleaned WAV and updates that exact Playlist clip automatically. Other occurrences of the same sample are unchanged. Playlist Undo restores the original clip in one step; the original audio file is never overwritten. The cleaned WAV stays in the project's Rendered/Cleaned folder (or the normal user render folder for projects without a data folder) and is referenced when saving the project. Keep these files with the project when transferring it.
+**Apply cleanup** commits the result inside Tesla with one undo step. If you continue editing afterward, the yellow **Apply to track** button at the bottom of Tesla (also in its File menu) returns the edited sample without running denoise again. **Apply to track**, available only when opened from a AQUILA clip, writes a separate cleaned WAV and updates that exact Playlist clip automatically. Other occurrences of the same sample are unchanged. Playlist Undo restores the original clip in one step; the original audio file is never overwritten. The cleaned WAV stays in the project's Rendered/Cleaned folder (or the normal user render folder for projects without a data folder) and is referenced when saving the project. Keep these files with the project when transferring it.
 
 Cleanup uses the current source file. Previously rendered vocal tuning or audio timing is already in that file and stays baked into the cleaned copy; the copied clip does not keep a live link to those earlier editing sessions. Mixer effects are not baked. ARA clips must first be rendered to ordinary audio. If you change the Playlist, source file or source channel while cleanup is open, Apply refuses to replace anything: reopen Cleanup from the intended clip. Changing Tesla's sample length or sample rate also prevents returning it to that clip, because doing so would invalidate its timing. Return links end when the project closes or the operation succeeds.
 
-Tesla also works separately as a **VST3** plugin in FL Studio and other VST3 hosts. Load or drag an audio file into Tesla, use the same cleanup controls, then **Apply cleanup** and **File > Save sample as**. Saved plugin state includes the edited audio. Automatic **Apply to track** is a ML Studio connection; external hosts use Tesla's normal save or drag-out workflow. This is an audio editor that processes the loaded sample, not a live noise gate or an automatic multitrack editor.
+Tesla also works separately as a **VST3** plugin in FL Studio and other VST3 hosts. Load or drag an audio file into Tesla, use the same cleanup controls, then **Apply cleanup** and **File > Save sample as**. Saved plugin state includes the edited audio. Automatic **Apply to track** is a AQUILA connection; external hosts use Tesla's normal save or drag-out workflow. This is an audio editor that processes the loaded sample, not a live noise gate or an automatic multitrack editor.
 
 This spectral tool targets steady noise such as hiss, fans and hum. It does not separate competing voices or reliably remove individual clicks. Strong settings can damage wanted audio, so compare before applying. Supports mono/stereo, 8–384 kHz, up to 20 minutes and 120 million samples. Noise profiles are not saved across editor sessions. Hide its toolbar tool and Playlist menu action through **Settings > General > Workspace Visibility > Choose what to show > Toolbar extras > Tesla audio cleanup / Playlist cleanup action**; hiding does not change existing audio.
 
@@ -821,7 +821,7 @@ Related: ML Stereo Shaper | ML Chorus
 ### ML Stereo Shaper
 Keywords: stereo shaper matrix left right crossfeed phase invert difference output
 The four matrix controls set how much of each input channel goes to each output channel. Use the diagonal for the direct left and right paths and the cross paths for blending or swapping sides. Negative values invert polarity on the corresponding path.
-Check stereo and mono after a change. Use delay and phase controls only when you want that relationship to change. A configured difference output can route an additional signal in the ML Studio Mixer.
+Check stereo and mono after a change. Use delay and phase controls only when you want that relationship to change. A configured difference output can route an additional signal in the AQUILA Mixer.
 ![ML Stereo Shaper | Left/right routing matrix and phase controls](../crates/os-app/assets/plugin-picker/stereo_shaper_default.png)
 
 #### Parameter names
@@ -943,11 +943,11 @@ Open Settings > Controls and look for a matching event in the editor and its par
 Keywords: macro script lsa saved actions custom toolbar import export
 Guide: controls
 In Settings > Controls, use Append to build a sequence of compatible editing actions. Save a name to reuse it and choose Pin as toolbar button to make it accessible from the toolbar.
-Use Export to back up controls. Import accepts a controls JSON file or a portable .lsa action script. Portable scripts run supported ML Studio actions and do not execute system commands.
+Use Export to back up controls. Import accepts a controls JSON file or a portable .lsa action script. Portable scripts run supported AQUILA actions and do not execute system commands.
 
 ### Connect an external assistant with MCP
 Keywords: AI assistant external MCP tools working orb approval
-Open AI assistant and enable AI control for the session. Save the setup to the Desktop and configure it in a compatible MCP client. Approve the named client in ML Studio when it connects. Disable AI control in ML Studio to revoke access.
+Open AI assistant and enable AI control for the session. Save the setup to the Desktop and configure it in a compatible MCP client. Approve the named client in AQUILA when it connects. Disable AI control in AQUILA to revoke access.
 The blue Working orb shows when an approved MCP command is running. Hide it under Settings > Visibility > Editor feedback > MCP activity orb.
 
 ### Record automation and manage initial values
@@ -964,7 +964,7 @@ Related: Edit curves and manage targets | Attach the Mixer to the Playlist
 
 ### Use MIDI output, sync and the MIDI Monitor
 Keywords: clock MIDI out sync input external offset port monitor messages midi mapping troubleshoot
-Enable the hardware output in Settings > MIDI and match its port to the output destination. Choose a sync type and set the Master sync offset when ML Studio leads. Enable external sync and set its offset when another device leads. Test start, stop and a short recorded passage with the intended clock source.
+Enable the hardware output in Settings > MIDI and match its port to the output destination. Choose a sync type and set the Master sync offset when AQUILA leads. Enable external sync and set its offset when another device leads. Test start, stop and a short recorded passage with the intended clock source.
 Use MIDI Monitor to check which port reports notes, CC, transport or pedal input. Dedicated DAW ports often carry control messages separately from keys. Refresh the device list after connecting hardware and check for another application using the same port.
 Related: MIDI devices, controller type and sync | Set up a keyboard or mixer controller
 
@@ -986,7 +986,7 @@ Drag the Settings window by its title bar to move it within the workspace. File,
 Each Settings page remembers its expanded and collapsed sections during the session. Clicking the selected tab keeps your scroll position.
 
 The User Guide has its own Detach command. Use it to place the guide on another monitor.
-Related: Put ML Studio windows on several monitors
+Related: Put AQUILA windows on several monitors
 
 ### Customize menus
 Keywords: menu layout arrange submenu hide items piano roll channel rack mixer
@@ -1046,7 +1046,7 @@ Under Advanced, read sample tempo information and Read sample root note use embe
 ### File, backups and sample libraries
 Keywords: settings file autosave location maximum user data folder factory folder browser extra search folders repair optional features reset browser cache
 File > Backup sets Autosave frequency, Location and Maximum retained backups. Use the Browser's backup area to reopen an earlier revision. Save deliberately before relying on an autosave as a transfer copy.
-File shows the User data folder and the factory content location. Add or remove Browser extra search folders to find sample libraries. Changing a search root changes where ML Studio looks for files. File > Troubleshooting offers Repair optional features and Reset browser cache.
+File shows the User data folder and the factory content location. Add or remove Browser extra search folders to find sample libraries. Changing a search root changes where AQUILA looks for files. File > Troubleshooting offers Repair optional features and Reset browser cache.
 
 ### Plugin manager and plugin editors
 Keywords: settings plugins formats search folder find new plugins rescan all rescan plugins with errors combine formats prefer vst clap hide favorite
@@ -1086,7 +1086,7 @@ Keywords: settings visibility choose what to show menus customize controls bindi
 Visibility lists the current show/hide controls by workspace area. Search for an exact label to find its switch. Open it directly from Settings > Visibility or through General > Workspace. The settings apply per profile, and Restore default visibility restores the shipped choices.
 Menus lets you organize menu entries and restore their structure. Controls manages keyboard shortcuts, mouse bindings, action sequences, and toolbar buttons. Back up your controls with Export and import a supported controls file or portable action script when moving profiles.
 
-### Put ML Studio windows on several monitors
+### Put AQUILA windows on several monitors
 Keywords: dock detach D second monitor external screen detached guide browser mixer playlist piano roll plugin windows layout
 Use a window's Detach command or D control where offered, then move its native title bar to the second monitor. Use Dock or D again to return it to the workspace. For the Browser, use its menu. For Help > User Guide, click Detach or Dock at the top of the guide.
 The guide's separate window keeps its own article, query and scroll. The main workspace can keep editing and playing while the guide is open. Use the native close button to hide it and Help > User Guide to reopen it. Window recovery uses the available monitors to bring a saved frame back into view if a display is removed.
@@ -1130,7 +1130,7 @@ Tell the recipient which third-party plugins and formats the project uses. For a
 
 ### Collaborate on a project
 Keywords: live collaboration host join invite network transport follow recovery
-Choose File > Collaborate. Save the project, stop playback, and host on a reachable address. Share the invitation privately. Your collaborator opens the same dialog and joins with that invitation. Both users need compatible ML Studio builds and their own copies of the plugins used in the project.
+Choose File > Collaborate. Save the project, stop playback, and host on a reachable address. Share the invitation privately. Your collaborator opens the same dialog and joins with that invitation. Both users need compatible AQUILA builds and their own copies of the plugins used in the project.
 Reopen Collaborate for session status, playback following, conflict resolution, recovery files, and End or Leave. Each computer renders its own audio. Use a LAN or shared private VPN for direct connections.
 
 ### Native projects, folders and templates
@@ -1211,7 +1211,7 @@ Show Playlist, Piano Roll, Channel Rack, Mixer and Browser from View or their to
 Toolbars contains panel and layout controls. Arrange windows provides named workspace presets, Undo last layout change, and layout hotkey assignments. Into workspace brings editor positions back into the available workspace. Background controls the workspace appearance where available.
 Close all windows closes editor windows, Close all plugin windows closes plugin editors, and Close all unfocused windows keeps the active editor. Browser-related entries jump to History, Patterns, Generators, Effects, Remote control and Plugin database where offered.
 <!-- menu-reference View -->
-Related: Show a window or restore your workspace | Put ML Studio windows on several monitors | Arrange the toolbar and utility windows
+Related: Show a window or restore your workspace | Put AQUILA windows on several monitors | Arrange the toolbar and utility windows
 
 ### Options menu
 Keywords: Options audio MIDI general file theme plugins project info settings metronome precount snap follow playhead CPU meter
@@ -1300,7 +1300,7 @@ Playlist pitch and timing editors offer separate Undo/Redo controls for the acti
 ### Report a problem and check for updates
 Keywords: report bug build update restart troubleshooting support
 Use Report a Bug and include your build, operating system, exact steps, expected result and actual result. A small project or screenshot helps when it can be shared safely.
-Use the update control to check for a signed release. Save your work before restarting to apply it. If the updater cannot start, ML Studio stays open and shows the error. If installation fails after closing, check the message when ML Studio reopens. You can also install a public update from the official downloads page. **Help > About** opens the page with the build number.
+Use the update control to check for a signed release. Save your work before restarting to apply it. If the updater cannot start, AQUILA stays open and shows the error. If installation fails after closing, check the message when AQUILA reopens. You can also install a public update from the official downloads page. **Help > About** opens the page with the build number.
 
 ### Main menu command index
 Keywords: menu reference complete commands file edit add patterns view options tools help shortcuts
@@ -1336,7 +1336,7 @@ Related: Fix delay, crackles or no sound | Report a problem and check for update
 
 ### Project compatibility and feature availability
 Keywords: FAQ FL Studio FLP lmn compatibility VST ARA native formats performance mode midi scripts versions platforms
-Open supported FL Studio projects through File > Open. Compare routing, automation, sample references and third-party formats against the original. Import reports help locate missing items or behaviors that require attention. Keep the original file and save your ML Studio work as a separate .lmn.
+Open supported FL Studio projects through File > Open. Compare routing, automation, sample references and third-party formats against the original. Import reports help locate missing items or behaviors that require attention. Keep the original file and save your AQUILA work as a separate .lmn.
 Greyed menu entries are unavailable in the current build or context. Playlist Performance Mode and MIDI scripts are not implemented. Choose the supported MIDI Learn or controller profiles for hardware control. Availability of native drivers, ARA editors and optional tools depends on platform and installed components.
 Use Help > About to compare builds and Help > Change Log to check what shipped in each release. Download and install the correct architecture for your OS.
-Related: Import a project from FL Studio | Set up a keyboard or mixer controller | Install and open ML Studio
+Related: Import a project from FL Studio | Set up a keyboard or mixer controller | Install and open AQUILA
