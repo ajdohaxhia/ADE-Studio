@@ -1,0 +1,181 @@
+# Builds AQUILA for Windows, Linux and macOS (Apple silicon and Intel) on GitHub's runners and publishes the files as a
+# GitHub release. Started by hand (Actions > AQUILA release > Run workflow) or by pushing a tag `aquila-v*`.
+#
+# The files are unsigned: macOS asks to confirm the first launch (right-click > Open), Windows SmartScreen too.
+name: AQUILA release
+
+on:
+  push:
+    tags: ['aquila-v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version, e.g. 2026.11.13.3 (empty = the one in packaging/github-release.json)
+        type: string
+        default: ''
+      publish:
+        description: Publish a GitHub release (off = keep the files as the run's artifacts only)
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: aquila-release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        env:
+          INPUT: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          v="$INPUT"
+          case "$GITHUB_REF" in refs/tags/aquila-v*) v="${GITHUB_REF#refs/tags/aquila-v}" ;; esac
+          [ -n "$v" ] || v=$(python3 -c "import json;print(json.load(open('packaging/github-release.json'))['tag'].lstrip('v'))")
+          echo "version=$v" >>"$GITHUB_OUTPUT"
+          echo "tag=aquila-v$v" >>"$GITHUB_OUTPUT"
+          echo "AQUILA $v"
+
+  build:
+    name: ${{ matrix.name }}
+    needs: plan
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Visual Studio 2022: ML Plasma's native build names that generator.
+          - name: Windows x86_64
+            os: windows-2022
+            platform: windows-x86_64
+          # An older Ubuntu: the program runs where the C and C++ runtimes are at least this old.
+          - name: Linux x86_64
+            os: ubuntu-22.04
+            platform: linux-x86_64
+          - name: macOS Apple silicon
+            os: macos-latest
+            platform: macos-arm64
+          - name: macOS Intel
+            os: macos-15-intel
+            platform: macos-x86_64
+    env:
+      LEMON_CHANNEL: stable
+      LEMON_VERSION: ${{ needs.plan.outputs.version }}
+      LEMON_STORAGE_CONFIG: ${{ github.workspace }}/packaging/aquila/ci-storage.json
+      PLATFORM: ${{ matrix.platform }}
+      VERSION: ${{ needs.plan.outputs.version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      # ALSA, JACK and Wayland for the program; OpenGL and X11 for ML Plasma's native engine (its plugin target is
+      # only made when OpenGL is found).
+      - name: Install Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2-dev libjack-jackd2-dev libwayland-dev libclang-dev pkg-config \
+            libgl1-mesa-dev libglu1-mesa-dev libegl1-mesa-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+            libxinerama-dev libxss-dev libxkbcommon-dev libpulse-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: aquila-release-${{ matrix.platform }}
+
+      - name: Build AQUILA
+        run: |
+          set -euo pipefail
+          # The build scripts start Python by this name.
+          [ "$RUNNER_OS" = Windows ] || export PYTHON=python3
+          if [ "$RUNNER_OS" = macOS ]; then
+            cargo run --release --locked -p bundle-app
+          else
+            cargo build --release --locked -p os-app --bin lemonstudio
+          fi
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          name="AQUILA-$VERSION-$PLATFORM"
+          mkdir -p dist "stage/$name"
+          cp LICENSE THIRD-PARTY-NOTICES.txt README.md "stage/$name/"
+          case "$RUNNER_OS" in
+            Windows)
+              cp target/release/lemonstudio.exe "stage/$name/AQUILA.exe"
+              (cd stage && 7z a -tzip -r "../dist/$name.zip" "$name" >/dev/null)
+              ;;
+            Linux)
+              cp target/release/lemonstudio "stage/$name/aquila"
+              chmod 755 "stage/$name/aquila"
+              tar -C stage -czf "dist/$name.tar.gz" "$name"
+              ;;
+            macOS)
+              cp -R "target/bundled/AQUILA.app" "stage/$name/"
+              ditto -c -k --keepParent "stage/$name" "dist/$name.zip"
+              ;;
+          esac
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: [plan, build]
+    # With whatever platforms built: one that failed is left out and named in the notes.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && (github.event_name == 'push' || inputs.publish) }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish the release
+        run: |
+          set -euo pipefail
+          ls -l dist
+          (cd dist && sha256sum * >SHA256SUMS.txt)
+          {
+            echo "AQUILA $VERSION, built from ${GITHUB_SHA:0:8}."
+            echo
+            echo "| Platform | File |"
+            echo "|---|---|"
+            for p in windows-x86_64 linux-x86_64 macos-arm64 macos-x86_64; do
+              f=$(cd dist && ls | grep -- "-$p\." || true)
+              echo "| $p | ${f:-not built in this run} |"
+            done
+            echo
+            echo "The files are not signed. On macOS, right-click AQUILA and choose Open the first time. On Windows, choose More info > Run anyway."
+          } >notes.md
+          cat notes.md
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber -R "$GITHUB_REPOSITORY"
+            gh release edit "$TAG" --notes-file notes.md -R "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "AQUILA $VERSION" --notes-file notes.md -R "$GITHUB_REPOSITORY"
+          fi

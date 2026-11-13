@@ -11,6 +11,8 @@ concurrency:
   cancel-in-progress: false
 jobs:
   publish:
+    # ML Studio's own re-publication of its downloads: not for AQUILA's repository (see aquila-release.yml).
+    if: github.repository == 'Dorfhaus/ML-Studio'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
