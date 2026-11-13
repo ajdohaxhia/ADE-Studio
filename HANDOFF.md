@@ -528,3 +528,20 @@ clean build of ML Studio v2026.11.13.2 on this machine.
 - Windows-only code is not compiled.
 - `packaging/github-release.json` lists ML Studio's v2026.11.13.2 binaries; there are no AQUILA builds.
 - The sampler's arpeggiator and echo were not listened to in the running app.
+
+## 14. ML Studio v2026.11.13.3 merged (2026-11-13)
+
+`47e3164e` ("Publish complete DAW v2026.11.13.3"): customisable wet/dry knobs in the Traditional Mixer, a plugin
+download catalogue in the browser, a route picker for plugin windows, theme regions. 40 files, 4 real conflicts.
+
+- `app.rs`: AQUILA's `channel_control` and ML Studio's `open_plugin_route_picker` both kept.
+- The test `vintage_switch_restores_theme_and_keeps_workspace_controls`, which AQUILA had retired, stays retired.
+- The installer script keeps AQUILA's name, at version 2026.11.13.3.
+- `plugin_window`'s track box test expects "Bus 11": AQUILA names mixer tracks "Bus N".
+
+### Test status
+
+Full workspace: 3136 passed, 96 failed, 141 ignored, before the "Bus 11" fix (that test passes now). Outside the
+baseline: the 16 of section 13 plus `plugin_downloads::tests::catalog_browser_search_and_layout`. That test searches
+the catalogue for a plugin (oXygen) that has no macOS arm64 download, so it cannot pass on this machine; it was not
+run against a clean ML Studio build.

@@ -75,7 +75,7 @@ Section "AQUILA"
 !endif
   CreateShortcut "${SHORTCUT}" "$INSTDIR\lemonstudio.exe"
   WriteRegStr HKCU "${REGKEY}" "DisplayName" "AQUILA"
-  WriteRegStr HKCU "${REGKEY}" "DisplayVersion" "2026.11.13.2"
+  WriteRegStr HKCU "${REGKEY}" "DisplayVersion" "2026.11.13.3"
   WriteRegStr HKCU "${REGKEY}" "Publisher" "AQUILA (based on Lemon Studio by its contributors)"
   WriteRegStr HKCU "${REGKEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "${REGKEY}" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'
