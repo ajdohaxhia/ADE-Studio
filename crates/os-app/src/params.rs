@@ -444,6 +444,9 @@ impl App {
         let mut stretch = Vec::new();
         let mut undo=Vec::new();
         let (mut seen, mut steps) = (Vec::new(), Vec::new());
+        // Value snapshots a plugin's controller can take without the audio lock (ML Studio's `param_values_job`): run
+        // once the instance is unlocked, so a large bank never holds the audio thread up.
+        let mut snapshots: Vec<(usize, os_host::ParamValuesJob)> = Vec::new();
         for (&key, h) in &self.plugins.hosted {
             // Only an instance with something new is locked, and never waited for: one the audio thread is rendering
             // is read again next tick (its events stay queued).
@@ -461,7 +464,9 @@ impl App {
                         None => Entry { id: u32::MAX, name: String::new(), hidden: true, read_only:true, default: 0.0, steps: 0 },
                     })
                     .collect();
-                let values = read_values(&*p, &params);
+                let job = p.param_values_job();
+                let values = if job.is_none() { read_values(&*p, &params) } else { BTreeMap::new() };
+                snapshots.extend(job.map(|j| (key, j)));
                 let now = std::time::Instant::now();
                 ui.lists.insert(key, List { plugin: weak, params, seen: look, values, open: BTreeMap::new(), read_at: now, reread: false, gestures: BTreeMap::new() });
             }
@@ -513,7 +518,10 @@ impl App {
                 // back to what was there. Never during a gesture, whose start is kept.
                 let due = l.reread || (events.is_empty() && moved_count && l.read_at.elapsed() >= REREAD_EVERY);
                 if !stale && due && l.open.is_empty() {
-                    l.values = read_values(&*p, &l.params);
+                    match p.param_values_job() {
+                        Some(job) => snapshots.push((key, job)),
+                        None => l.values = read_values(&*p, &l.params),
+                    }
                     (l.read_at, l.reread) = (std::time::Instant::now(), false);
                 }
             }
@@ -557,6 +565,16 @@ impl App {
             }
             #[cfg(target_os = "linux")]
             crate::dropout_log::held(&p.desc().name, "reading its parameters", t0.elapsed());
+        }
+        for (key, job) in snapshots {
+            let values = job();
+            if let Some(l) = ui.lists.get_mut(&key) {
+                for (id, v) in values {
+                    if v.is_finite() && !l.open.contains_key(&id) {
+                        l.values.insert(id, v);
+                    }
+                }
+            }
         }
         // An edit in a plugin's window is an undo step (by the owner's id, so it follows moves): a gesture's from its
         // begin to its end, values sent without one joined while they come in a row.

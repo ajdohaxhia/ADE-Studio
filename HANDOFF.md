@@ -471,4 +471,16 @@ not compile.
 
 - Windows-only code is not compiled.
 - `packaging/github-release.json` still links ML Studio's binaries; there are no AQUILA builds to link.
-- ML Studio's batched parameter polling is not ported.
+- ML Studio's batched parameter polling (`poll_index`, `POLL_BATCH`) is not ported: AQUILA does not poll values
+  every tick, it reads them when a list is built and when a re-read is due.
+
+### Update (same day): full run and lock-free value reads
+
+- Full workspace after the fixes above: 3079 passed, 100 failed, 140 ignored. The failures outside the baseline are
+  the same 15 as in section 11.
+- `params.rs` now uses `Plugin::param_values_job()` (from ML Studio's host) for those two reads when a plugin offers
+  it: the snapshot is collected in `snapshots` and run after the instance is unlocked, so a large bank does not hold
+  the audio thread. Plugins without it are read under the lock as before. The os-app tests are unchanged by this
+  (1466 passed, 90 failed); no test exercises the snapshot path with a real VST3.
+- The build image had been unmounted; remount with
+  `hdiutil attach "/Volumes/SanDisk EXTREME SSD/aquila-build/aquilabuild.sparseimage"`.
