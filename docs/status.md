@@ -215,7 +215,7 @@ editor, the rack's Loop step channels / Loop all channels). The full, item-by-it
 
 - CLAP, VST3 and VST2 instruments and effects, with their editors and saved state
 - A plugin's right-click menu on a parameter offers "Create automation clip" (CLAP and VST3); a VST3 plugin that asks
-  the host to show its menu gets one of Lemon Studio's own menus, docked or detached
+  the host to show its menu gets one of ML Studio's own menus, docked or detached
 - The parameter menu (a parameter in the browser after "Browse parameters", TOOLS ▸ Last tweaked): create or edit
   the parameter's automation clip, link a controller, copy, paste, type in or set a value (a submenu of its steps, or
   its default and minimum to maximum), remove an initial value read from a file
@@ -247,7 +247,7 @@ editor, the rack's Loop step channels / Loop all channels). The full, item-by-it
   selected mixer track, an instrument to the bottom of the channel rack.
 - A plugin manager in Settings with your own search folders
 - Manual plugin discovery; each file is tried in a separate scanner process, so a broken plugin
-  cannot take Lemon Studio down
+  cannot take ML Studio down
 - Favourites and hidden plugins
 - The browser's Favorites: right-click a file or a plugin ▸ Favorite; favorite rows show a star, and the Favorites
   tab lists favorite plugins, then files. A plugin's favorite is its plugin-manager star, also toggled by "Add to
@@ -260,7 +260,7 @@ editor, the rack's Loop step channels / Loop all channels). The full, item-by-it
 - The browser's arrow keys, with the mouse over it: Up / Down select the row above / below, Right opens a folder and
   steps into it, Left closes it and goes to the parent; a sample the selection lands on plays, and Right plays it again
 - One menu entry per plugin installed in several formats (VST3, CLAP, VST2: your preferred format wins)
-- Presets in the plugin window's title bar: your own presets, then factory presets (compiled in for Lemon Studio's
+- Presets in the plugin window's title bar: your own presets, then factory presets (compiled in for ML Studio's
   own plugins), stepped with the arrows or the wheel; Save preset as..., Rename, Delete and Browse presets
 - The mixer's slot menu lists the effect's presets and has Browse presets and Save preset as..., as its window
   menu does
@@ -377,7 +377,7 @@ channel (MIDI channel 1, 2, 3 … in rack order, port 0, patch 1, on the master 
 own; names, places and notes kept), as one undo step that brings the channels and their instruments back.
 Not yet (greyed in the menu bar): TOOLS > Control builder; VIEW > Script output.
 
-**Window positions.** Where the windows were when Lemon Studio closed comes back at the next start: the main
+**Window positions.** Where the windows were when ML Studio closed comes back at the next start: the main
 window (its place and size, and whether it was maximized; brought back onto a screen if its screen is gone) and the
 Playlist, Mixer, Piano roll (floating, maximized or collapsed), Channel rack, Plugin performance monitor, Tempo tapper
 and Touch controller. Kept with the program's settings, not the project. Which windows are open is not kept.
@@ -479,7 +479,7 @@ and Touch controller. Kept with the program's settings, not the project. Which w
 - Lemon Limiter (Fruity Limiter: limiter, compressor and noise gate), Lemon Reverb (Fruity Reeverb 2) and Lemon
   Delay (Fruity Delay 3), also VST3 and CLAP plugins. A project's Fruity Reeverb 2, Fruity Delay 3 and Fruity Limiter
   slots play through the same sound (the Limiter's compressor, gate, look-ahead and sidechain included)
-- Every Lemon plugin is built into Lemon Studio, so none needs a plugin file; the VST3 and CLAP bundles are for other
+- Every Lemon plugin is built into ML Studio, so none needs a plugin file; the VST3 and CLAP bundles are for other
   hosts. A project stores the built-in effects other than the EQ as wrapped CLAP plugins, as it stored their bundles
 - Lemon Soft Clipper, Lemon Fast Distortion, Lemon Balance, Lemon Stereo Enhancer, Lemon Transient Processor, Lemon
   Chorus and Lemon Stereo Shaper as VST3 and CLAP plugins; a project's Fruity Soft Clipper, Fruity Fast Dist, Fruity
@@ -533,7 +533,7 @@ and Touch controller. Kept with the program's settings, not the project. Which w
   delay compensation); Lemon Stereo Shaper as a plugin keeps the setting but has no output for it
 - Lemon Parametric EQ plays FL's Parametric EQ 2 in every quality mode, in a project's mixer slots and as a plugin:
   plain, HQ Legacy, HQ+, HQ Enhanced and linear phase (LIN) with its sizes and crossfade speeds. The plugin tells the
-  host LIN's and HQ Enhanced's delay, and Lemon Studio compensates it in a project's mixer slots as for any plugin
+  host LIN's and HQ Enhanced's delay, and ML Studio compensates it in a project's mixer slots as for any plugin
 - The sampler plays a project's sample settings (start and length, the sample file's loop, the sample
   effects, the channel filter, declicking) and each note's own pan and filter offsets
 - A file of 30 s or more loaded into a sampler channel turns its Keep on disk on (General settings ▸
@@ -545,13 +545,13 @@ and Touch controller. Kept with the program's settings, not the project. Which w
   small buffer per voice stay in memory. It applies to uncompressed WAV and AIFF files played as they are; compressed
   files, the sample tools and effects, reverse and the Stretch / Stretch Pro methods keep the sample in memory, and
   the sampler says which ("in RAM" or "on disk"). Exports wait for the disk, so they sound exactly as from memory
-- Inside Lemon Studio the playback engine keeps only the length of a WAV or AIFF sample that the sampler plays, not
+- Inside ML Studio the playback engine keeps only the length of a WAV or AIFF sample that the sampler plays, not
   a decoded copy of its own, so a sample playing from disk takes no memory for its file there either. Opening a project still decodes each
   sampler file once while it loads; that copy is let go when loading ends
 
 ## ✅ Audio editing
 
-- Tesla, Lemon Studio's audio editor and recorder (its counterpart to FL's Edison), sits in a mixer slot and is also
+- Tesla, ML Studio's audio editor and recorder (its counterpart to FL's Edison), sits in a mixer slot and is also
   a VST3 and CLAP plugin for other hosts. It records what reaches its slot (now, on input, while input is present,
   or while the song plays, for a set time or size), holds one sample with markers, regions and a loop, and edits it:
   cut, copy, paste, trim, silence, normalize, fades and declicks, reverse, channel tools, Amp, with undo
@@ -733,7 +733,7 @@ and Touch controller. Kept with the program's settings, not the project. Which w
 ## 🚧 Audio drivers
 
 - WASAPI on Windows, in shared mode (with the shorter periods a device offers there, where Windows says) or
-  exclusive mode (Settings > Audio ▸ Mode: Lemon Studio alone on the device, at its own rate and down to its smallest
+  exclusive mode (Settings > Audio ▸ Mode: ML Studio alone on the device, at its own rate and down to its smallest
   period); a device that refuses exclusive mode plays in shared mode, and the page says why
 - ASIO® on Windows: the installed drivers are in Settings > Audio's Output device list; every track has an output menu
   with the pairs of the driver's first 16 outputs, the master plays on the pair chosen for it, and Show ASIO panel opens
@@ -744,7 +744,7 @@ and Touch controller. Kept with the program's settings, not the project. Which w
 - Core Audio on macOS
 - Output device, sample rate and buffer length in Settings > Audio
 - Auto close (Settings > Audio): the output closes while another program is in front, and a playing song pauses
-  until Lemon Studio is back in front
+  until ML Studio is back in front
 - A device that fails (unplugged, or a driver asking to be reset) is opened again; an ASIO driver that does not
   open gives way to the default device
 - An ASIO driver's first 8 inputs open with its outputs (full duplex) for audio recording
@@ -767,7 +767,7 @@ ASIO is a registered trademark of Steinberg Media Technologies GmbH.
   the applied theme live with five knobs and eight colour circles, each with a colour picker
 - A theme file's workspace picture (PNG or JPEG, on either design) and its playlist and piano roll grid line
   strength; not yet the HTML background, the event editor grid and the Option colour
-- Lemon Studio's own plugin editors are drawn in the Lemon design only, whatever design the app shows
+- ML Studio's own plugin editors are drawn in the Lemon design only, whatever design the app shows
 - Smooth scrolling: the wheel and the scroll bars' arrows ease the editors' views (General settings ▸ Display ▸
   Smoothing, and Animation refresh rate for how often animations redraw)
 

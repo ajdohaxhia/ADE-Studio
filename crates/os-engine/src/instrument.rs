@@ -89,6 +89,10 @@ pub trait Instrument: Send {
         let _ = voice;
         self.choke(offset, key);
     }
+    /// Release a named note through its envelope without releasing other notes on the key.
+    fn voice_release(&mut self, offset: u32, key: u8, _voice: u32) {
+        self.note_off(offset, key);
+    }
     /// Tunes the sounding voices of `key` to `semitones` from the key's own pitch (portamento glides; spec:
     /// audio/channel-voices.md). Default: ignored (no glide).
     fn tune(&mut self, offset: u32, key: u8, semitones: f32) {
@@ -264,6 +268,8 @@ impl ChannelVoicing {
 /// Default: centred, no offsets, MIDI channel 1.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct NoteLevels {
+    /// Pitch offset in semitones for a generated sampler echo.
+    pub echo_pitch: f32,
     pub drive:f32,
     pub pan: f32,
     pub mod_x: f32,
@@ -276,7 +282,7 @@ pub struct NoteLevels {
 impl NoteLevels {
     /// The levels of a note's pan, mod X and mod Y bytes.
     pub fn of_bytes(pan: u8, mod_x: u8, mod_y: u8) -> NoteLevels {
-        NoteLevels { drive:0., pan: (f32::from(pan) - 64.0) / 64.0, mod_x: (f32::from(mod_x) - 128.0) / 128.0, mod_y: (f32::from(mod_y) - 128.0) / 128.0, channel: 0 }
+        NoteLevels { echo_pitch: 0., drive:0., pan: (f32::from(pan) - 64.0) / 64.0, mod_x: (f32::from(mod_x) - 128.0) / 128.0, mod_y: (f32::from(mod_y) - 128.0) / 128.0, channel: 0 }
     }
 }
 

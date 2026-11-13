@@ -1,6 +1,6 @@
 # Alpha checklist
 
-What stands between Lemon Studio and its first alpha: a fully functional DAW at FL Studio parity. Third-party plugins
+What stands between ML Studio and its first alpha: a fully functional DAW at FL Studio parity. Third-party plugins
 (CLAP, VST3, VST2) are not part of the alpha bar; hosting them already works, and the rest of that work comes later.
 
 The list started from an assessment of `main` at `a637e72` on 2026-10-24 and was checked again against `fb4382e` on

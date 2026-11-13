@@ -484,3 +484,47 @@ not compile.
   (1466 passed, 90 failed); no test exercises the snapshot path with a real VST3.
 - The build image had been unmounted; remount with
   `hdiutil attach "/Volumes/SanDisk EXTREME SSD/aquila-build/aquilabuild.sparseimage"`.
+
+## 13. ML Studio v2026.11.13.2 merged (2026-11-13)
+
+ML Studio published `6be4ba4c` ("Publish complete DAW v2026.11.13.2"): the product is renamed from "Lemon Studio" to
+"ML Studio" throughout (stock plugins too: "ML Limiter", "ML Sampler", ...), the sampler gains arpeggiator and echo
+note effects in the engine (`engine/sampler_notes.rs`), preset loads build a new plugin instance, the user guide is
+rewritten with its own detachable window, and saved custom window layouts arrive (`workspace_layout.rs`). 110
+conflicts in 40 files; 52 were only the rename and were resolved by script (ours where ML Studio only renamed, theirs
+with "ML Studio" turned into "AQUILA" where only AQUILA had renamed).
+
+### Choices made
+
+- **Names:** the app stays AQUILA (`version::NAME`, `os_paths::APP_NAME`, window titles, updater messages, the
+  templates' factory category). The stock plugins take ML Studio's new "ML ..." names; the effects only AQUILA has
+  keep theirs (Lemon Filter, Flanger, Phaser, Vocoder, Peak Controller, Formula Controller, Drop). The user guide text
+  still says "ML Studio".
+- **Engine:** ML Studio's sampler note effects are in, with AQUILA's extra fields kept on `Trigger`, `notes::Event`
+  and `NoteLevels` (`clip_origin`, `at`, `stop`, `colour`, `swing`, `end`, `channel`). A channel that is off still
+  starts no notes (the check is at the top of `start_plain_trigger`). `run_slot` smooths, then reports the skipped
+  slot.
+- **Lemon Sampler DSP:** Lemon Studio's restructured voice code stays; ML Studio's `echo_pitch` and `note_off_id`
+  are added to it.
+- **Playhead follow (`App::auto_scroll`):** rewritten once from both: ML Studio's `visual_tick` and its "not while
+  dragging in the playlist" rule, Lemon Studio's piano roll following a pattern clip in song mode.
+- **VIEW > Arrange windows:** Lemon Studio's layouts first, then ML Studio's saved custom layouts; the entry is
+  always shown.
+- **Preset loads:** ML Studio's prepared instance. An instance whose library is not among the listed plugins takes the
+  state in place instead of being refused (`plugins::NO_LIBRARY`); one whose library changed is still refused.
+- **Guide:** topics added for the seven AQUILA-only effects, which the guide's own test requires.
+- **Help > About** stays AQUILA's (`MenuCmd`), not ML Studio's Settings page.
+- `rack_additions_fit_channels...` allows the rack's top to sit a fraction of a pixel above the workspace's, because
+  AQUILA keeps windows on whole pixels.
+
+### Test status
+
+`newfail.sh --workspace --lib --bins --tests --no-fail-fast`: 3120 passed, 100 failed, 140 ignored. Outside the
+baseline: the 15 of section 11 plus `app::tests::transport_clock_digits_share_a_bottom_line`, which also fails in a
+clean build of ML Studio v2026.11.13.2 on this machine.
+
+### Still open
+
+- Windows-only code is not compiled.
+- `packaging/github-release.json` lists ML Studio's v2026.11.13.2 binaries; there are no AQUILA builds.
+- The sampler's arpeggiator and echo were not listened to in the running app.

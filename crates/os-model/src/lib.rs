@@ -11,6 +11,7 @@
 
 pub mod clip_lfo;
 pub mod crossfade;
+pub mod chords;
 pub mod mpe;
 pub mod curve;
 pub mod vocal;
@@ -1856,6 +1857,12 @@ pub struct Arrangement {
     pub tracks: Vec<PlaylistTrack>,
     /// Time markers in file order (spec: flp/events/playlist.md "Time markers").
     pub markers: Vec<TimeMarker>,
+    /// Custom row order in the attached view, using the ordinary Playlist's row numbers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attached_order: Vec<u16>,
+    /// Mixer inserts whose empty placeholder lanes were explicitly removed from this arrangement.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attached_hidden: Vec<u16>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -2196,12 +2203,24 @@ impl TimeMarker {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum PlaylistTrackMode {
+    #[default]
+    Legacy,
+    Free,
+    Audio,
+    Instrument,
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PlaylistTrack {
+    /// Saved attached-track editing policy. Ordinary Playlist edits ignore it.
+    #[serde(default)]
+    pub mode: PlaylistTrackMode,
     /// Explicit source lane for the attached mixer. Presentation never changes audio routing.
     #[serde(default)]
     pub attached_mixer: Option<u16>,
-    /// Optional individual lane height in logical pixels.
+    /// Optional individual lane height in logical pixels at the default Playlist zoom.
     pub height:Option<f32>,
     pub folder:bool,
     /// Original clips retained for reversible instrument freezing. Mixer processing stays live.
@@ -2235,6 +2254,7 @@ impl PlaylistTrack {
     /// Track `number` as a new project has it: unnamed, default colour, on, not grouped, not linked.
     pub fn new(number: u32) -> Self {
         PlaylistTrack {
+            mode: PlaylistTrackMode::Legacy,
             attached_mixer: None,
             height: None,
             folder: false,

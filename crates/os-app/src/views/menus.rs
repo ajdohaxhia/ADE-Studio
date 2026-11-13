@@ -210,7 +210,7 @@ pub const BLEND_LABEL: &str = "Blend recorded notes";
 pub const LOOP_LABEL: &str = "Loop record";
 
 /// OPTIONS > Auto scrolling (spec: ui/auto-scrolling.md §1).
-pub const AUTOSCROLL_LABEL: &str = "Auto scrolling";
+pub const AUTOSCROLL_LABEL: &str = "Follow playhead";
 /// OPTIONS > Enable groups (spec: ui/enable-groups.md §1).
 pub const GROUPS_LABEL: &str = "Grouped clips move together";
 /// OPTIONS > Step edit (spec: ui/step-edit.md).
@@ -720,7 +720,16 @@ pub fn sub_items(cmd: MenuCmd) -> Option<fn(&State) -> Vec<crate::playlist::PIte
         // spec: ui/toolbar-menu.md §8
         Sub::Toolbars => toolbar_items,
         // spec: ui/menu-submenus.md §2
-        Sub::Arrange => crate::arrange::items,
+        // Lemon Studio's layouts, then ML Studio's saved custom layouts.
+        Sub::Arrange => |s| {
+            let mut items = crate::arrange::items(s);
+            let custom = crate::workspace_layout::items(s);
+            if !custom.is_empty() {
+                items.push(crate::playlist::PItem::sep());
+                items.extend(custom);
+            }
+            items
+        },
         // spec: ui/menu-submenus.md §3
         Sub::Background => crate::wallpaper::items,
         // spec: ui/menus.md "HELP"

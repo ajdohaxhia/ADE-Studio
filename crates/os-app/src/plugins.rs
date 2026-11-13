@@ -359,6 +359,8 @@ pub struct Plugins {
     pub effects: Vec<Available>,
     /// By rack row, or by `fx_key` for mixer slots.
     pub hosted: BTreeMap<usize, Hosted>,
+    /// Keep editors and their instances alive until every renderer has released them.
+    preset_retired: Vec<Hosted>,
     /// Main window handle (owner of plugin windows).
     pub owner: isize,
     pub scale: f32,
@@ -948,6 +950,56 @@ impl Plugins {
         self.hosted.get(&key).and_then(|h| h.plugin.lock().ok()).is_some_and(|mut p| p.load_state(data))
     }
 
+    /// Prepare on the UI thread, without holding the playing instance during loading.
+    /// A failure leaves the original instance, editor and preset label untouched.
+    pub(crate) fn prepare_preset(&mut self, key: usize, data: &[u8]) -> Result<Hosted, String> {
+        let old = self.hosted.get(&key).ok_or("Plugin no longer exists")?;
+        if old.ara_source.is_some() || os_vst3::ara::State::is(data) {
+            return Err("ARA document state must be restored through its project editor".into());
+        }
+        let desc = self.descriptor(key).ok_or("Plugin unavailable")?;
+        let listed = self.available.iter().chain(&self.effects).any(|a| a.desc.uid() == desc.uid());
+        let available = self.available.iter().chain(&self.effects)
+            .find(|a| a.desc.uid() == desc.uid() && a.desc.path == desc.path).cloned()
+            .ok_or(if listed { "The playing plugin's library changed; reopen it before loading a preset" } else { NO_LIBRARY })?;
+        let plugin = available.lib.create(&available.desc.id)?;
+        {
+            let mut p = plugin.lock().map_err(|_| "Plugin unavailable")?;
+            if !p.load_state(data) { return Err(format!("{} declined the preset", desc.name)); }
+            if self.rate == 0 { self.rate = crate::transport::Transport::device_rate().unwrap_or(48000); }
+            if !p.activate(self.rate) { return Err(format!("{} could not start", desc.name)); }
+            if fx_of(key).is_none() {
+                p.use_start_param(SAMPLE_START);
+                if crate::project_plugins::is_builtin(&desc) {
+                    p.use_note_levels();
+                    if desc.name == LEMON_SAMPLER { p.use_voice_gains(); }
+                }
+            }
+        }
+        let mut next = Hosted::new(plugin);
+        let old = &self.hosted[&key];
+        next.detached = old.detached;
+        #[cfg(plugin_windows)] {
+            next.placed = old.placed;
+            if let Some(w) = &old.window {
+                next.detached = w.detached();
+                #[cfg(windows)] { next.placed = w.position().or(next.placed); }
+            }
+        }
+        Ok(next)
+    }
+
+    pub(crate) fn install_preset(&mut self, key: usize, next: Hosted) {
+        self.pending_scales.remove(&key);
+        if let Some(old) = self.hosted.insert(key, next) { self.preset_retired.push(old); }
+    }
+
+    fn sweep_preset_editors(&mut self) {
+        // No engine can acquire a new reference once the transport has switched.
+        // Destruction/editor closing happens here on the UI, outside the audio path.
+        self.preset_retired.retain(|h| Arc::strong_count(&h.plugin) > 1);
+    }
+
     /// Sets the parameter named `name` of the instance under `key` to plain value `plain` (the plugin's own range).
     /// False when the instance or the parameter is missing.
     pub fn set_param_named(&self, key: usize, name: &str, plain: f64) -> bool {
@@ -1488,6 +1540,7 @@ impl Plugins {
     /// UI tick: plugin housekeeping, then the windows' requests (a closed window is closed here).
     #[cfg_attr(not(plugin_windows), allow(unused_variables, unused_mut))]
     pub fn idle(&mut self, info: impl Fn(usize) -> Option<ChannelInfoT>) -> Vec<Request> {
+        self.sweep_preset_editors();
         sweep_retired();
         os_host::guard::watch_windows(false);
         // Linux: the frames' X11 events, then the editors' descriptors and timers (`os_host::runloop`).
@@ -1777,6 +1830,8 @@ pub const LEMON_EQ: &str = "ML EQ";
 /// Lemon Studio's effects compiled in besides the EQ (`builtin_effects`, in this order). They have no file plugin of
 /// their own to be stored as, so a project stores them wrapped, as it stored their plugin files
 /// (`project_plugins::is_wrapped`).
+/// `prepare_preset`'s error for an instance whose library is not among the listed plugins.
+pub(crate) const NO_LIBRARY: &str = "The playing plugin's library is unavailable; reopen it before loading a preset";
 pub const LINKED_EFFECTS: [&str; 20] = [
     "ML Limiter",
     "ML Reverb",

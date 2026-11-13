@@ -474,7 +474,7 @@ fn tab_strip(ui: &mut Ui) {
         rr(x0, x0 + 42.0, 26.0, 71.0)
     };
     let hover = (0..2u8).find(|&i| ui.state(cell(i), &Target::Tab(i)).hover);
-    lemon::page_strip(ui.c, rr(4.0, 563.0, 25.0, 71.0), 2, ui.st.tab, hover, &|i| 5.0 + 43.0 * f32::from(i), &mut |c, i, x, yy, col| page_icon(c, i, x, yy, col));
+    lemon::page_strip(ui.c, rr(4.0, 563.0, 25.0, 71.0), 2, ui.st.tab, hover, &|i| 5.0 + 43.0 * f32::from(i), &mut |c, i, x, yy, col| page_icon(c, i, x, yy, if i == ui.st.tab { brand::MAIN } else { col }));
     for i in 0..2u8 {
         ui.hit(cell(i), Target::Tab(i));
     }

@@ -9,7 +9,7 @@ Unicode true
 !endif
 Name "AQUILA"
 OutFile "${OUTPUT}"
-InstallDir "$LOCALAPPDATA\Programs\Lemon Studio"
+InstallDir "$LOCALAPPDATA\Programs\ML Studio"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 !define MUI_ABORTWARNING
@@ -29,6 +29,7 @@ SetCompressor /SOLID lzma
 !else
 !define REGKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\LemonStudio-MichaelLane"
 !define SHORTCUT "$DESKTOP\AQUILA.lnk"
+InstallDirRegKey HKCU "${REGKEY}" "InstallLocation"
 !endif
 Function .onInit
   ${IfNot} ${RunningX64}
@@ -55,7 +56,7 @@ Section "AQUILA"
   File "${PAYLOAD}\Lemon Studio Source.zip"
   File "${PAYLOAD}\Lemon Starter.lmn"
   File "${PAYLOAD}\runtime\*.dll"
-  WriteRegStr HKCU "Software\Classes\LemonStudio.LmnProject" "" "Lemon Studio project"
+  WriteRegStr HKCU "Software\Classes\LemonStudio.LmnProject" "" "ML Studio project"
   WriteRegStr HKCU "Software\Classes\LemonStudio.LmnProject\DefaultIcon" "" '$\"$INSTDIR\lemonstudio.exe$\",0'
   WriteRegStr HKCU "Software\Classes\LemonStudio.LmnProject\shell\open\command" "" '$\"$INSTDIR\lemonstudio.exe$\" $\"%1$\"'
   WriteRegStr HKCU "Software\Classes\.lmn\OpenWithProgids" "LemonStudio.LmnProject" ""
@@ -63,9 +64,18 @@ Section "AQUILA"
   StrCmp $0 "" 0 +2
   WriteRegStr HKCU "Software\Classes\.lmn" "" "LemonStudio.LmnProject"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
+!ifndef TEST_INSTALL
+  ; Retire the old shortcut name when upgrading the same installation.
+  ReadRegStr $0 HKCU "${REGKEY}" "InstallLocation"
+  ${If} $0 == $INSTDIR
+    ${AndIf} ${FileExists} "$DESKTOP\Lemon Studio.lnk"
+    ${AndIfNot} ${FileExists} "${SHORTCUT}"
+    Rename "$DESKTOP\Lemon Studio.lnk" "${SHORTCUT}"
+  ${EndIf}
+!endif
   CreateShortcut "${SHORTCUT}" "$INSTDIR\lemonstudio.exe"
   WriteRegStr HKCU "${REGKEY}" "DisplayName" "AQUILA"
-  WriteRegStr HKCU "${REGKEY}" "DisplayVersion" "2026.11.13.1"
+  WriteRegStr HKCU "${REGKEY}" "DisplayVersion" "2026.11.13.2"
   WriteRegStr HKCU "${REGKEY}" "Publisher" "AQUILA (based on Lemon Studio by its contributors)"
   WriteRegStr HKCU "${REGKEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "${REGKEY}" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'

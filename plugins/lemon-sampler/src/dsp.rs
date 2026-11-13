@@ -342,6 +342,7 @@ struct Voice {
     /// Cents from the root key, and the played sample's rate over the output rate (`q`).
     key_cents: f32,
     q: f64,
+    echo_pitch: f64,
     /// Host tuning of this key's voices, semitones (portamento glides; spec: audio/channel-voices.md).
     tune: f64,
     /// The note's own pan (−1..1) and its filter offsets in knob units, from the host per note (CLAP note expression
@@ -898,6 +899,7 @@ impl Engine {
             pos,
             key_cents,
             q,
+            echo_pitch: 0.0,
             tune: 0.0,
             note_pan: 0.0,
             mod_x: 0.0,
@@ -929,11 +931,18 @@ impl Engine {
     }
 
     pub fn note_off(&mut self, key: u8, b: &Block) {
+        self.note_off_id(None, key, b);
+    }
+
+    pub fn note_off_id(&mut self, id: Option<i32>, key: u8, b: &Block) {
         self.retime(&b.records);
         let close = Close::new(&declick(b.declick), f64::from(self.rate));
         let vol_env = b.records[VOL].on;
         let looped = self.shape().is_some_and(|(n, _)| self.loop_frames(b, n).1.is_some());
-        for v in self.voices.iter_mut().filter(|v| v.key == key && !v.released) {
+        for v in self.voices.iter_mut().filter(|v| !v.released && match id {
+            Some(id) if id >= 0 => v.id == Some(id),
+            _ => v.key == key,
+        }) {
             v.released = true;
             // With the volume envelope on, the envelopes go into their release and the voice closes when it has run
             // out; without it a looping voice closes at the note's end, and a one-shot voice ignores the end, its other
@@ -984,6 +993,12 @@ impl Engine {
     pub fn tune(&mut self, key: u8, semitones: f64) {
         for v in self.voices.iter_mut().filter(|v| v.key == key) {
             v.tune = semitones;
+        }
+    }
+
+    pub fn echo_pitch(&mut self, id: i32, semitones: f32) {
+        for v in self.of_note(Some(id), 0) {
+            v.echo_pitch = f64::from(semitones.clamp(-48.0, 48.0));
         }
     }
 
@@ -1211,7 +1226,7 @@ fn start_tick(v: &mut Voice, mut rt: Option<&mut Rt>, src: &Src, b: &Block, cx: 
     }
     // The ratio: the voice's pitch and the envelope's and LFO's cents as one single (spec: audio/sampler.md "The
     // ratio"); a realtime voice's transposition (with the stretch's PITCH).
-    let cents = (f64::from(v.key_cents) + b.cents + v.tune * 100.0 + b.ts_cents) as f32 + parts.pitch;
+    let cents = (f64::from(v.key_cents) + b.cents + (v.tune + v.echo_pitch) * 100.0 + b.ts_cents) as f32 + parts.pitch;
     let ratio = (f64::from(cents) * C).exp() * v.q * cx.rs;
     // A realtime voice plays the sample by resampling while there is nothing to stretch (the root key, no PITCH, MUL 1
     // or TIME the sample's own duration); its stretcher starts the first time there is, and stays. **(OS)**
