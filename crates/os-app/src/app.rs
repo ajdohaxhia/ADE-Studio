@@ -27734,7 +27734,7 @@ mod tests {
             click(&mut app, &mut canvas, about);
             assert_eq!(app.state.settings.tab, settings::ABOUT);
             assert!(app.state.settings.advanced_theme.is_none());
-            assert!(settings::page(settings::ABOUT, &app.state).iter().any(|group| group.rows.iter().any(|row| matches!(row, settings::Row::Big(text) if text == "ML Studio"))));
+            assert!(settings::page(settings::ABOUT, &app.state).iter().any(|group| group.rows.iter().any(|row| matches!(row, settings::Row::Big(text) if text == crate::version::NAME))));
             if let Some(dir) = std::env::var_os("OS_SHOT_DIR") {
                 canvas.pixmap.save_png(PathBuf::from(dir).join(format!("about-{}.png", design.key()))).unwrap();
             }

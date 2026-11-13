@@ -320,7 +320,9 @@ pub fn keep_all(s: &mut State) -> bool {
     let mut moved = false;
     for w in crate::floating::PLACED.iter().map(|p| p.win) {
         let Some(r) = rect_of(s, w) else { continue };
+        // `set_pos` keeps whole px: compare the place it would store, or a fractional one moves on every frame.
         let pos = keep(r.x, r.y, r.w, work);
+        let pos = (pos.0.round(), pos.1.round());
         if pos != (r.x, r.y) {
             set_pos(s, w, pos);
             moved = true;

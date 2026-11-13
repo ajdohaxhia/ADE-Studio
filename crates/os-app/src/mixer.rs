@@ -2526,7 +2526,8 @@ fn track_items(s: &State, n: u16) -> Vec<PItem> {
         PItem::new("Move right", mx(MCmd::MoveRight(n))).key("Alt+Right"),
         PItem::new("Delete", mx(MCmd::Delete(n))).key("Del"),
         PItem::new("Insert one", mx(MCmd::InsertOne(n))),
-        PItem::new("Insert multiple...", mx(MCmd::InsertMultiple(n))),
+        // Hidden with ML Studio's Insert Multiple Tracks entry (its visibility switch).
+        if crate::workspace_visibility::shown(INSERT_MULTIPLE_VISIBILITY) { PItem::new("Insert multiple...", mx(MCmd::InsertMultiple(n))) } else { PItem::not_yet("Insert multiple...") },
         PItem::sub("Insert from state", state_items(|p| mx(MCmd::InsertState(n, p)))),
         PItem::sep(),
         PItem::sub(

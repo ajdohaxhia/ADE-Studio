@@ -409,3 +409,21 @@ Full list with messages: `/Volumes/aquilabuild/work/base-msgs.txt`. About 13 are
   - `channel_bounce::tests::rack_features_compact_controls_and_filtered_piano_layout`
   - `help::tests::guide_menu_search_read_back_and_visibility` (a guide topic lacks category, keywords or paragraphs)
   - `mixer::tests::mixer_batch_insert_validates_and_restores_routing_and_selection` (AQUILA's track menu always shows "Insert multiple...")
+
+### Update after fixing the merge's integration failures (2026-11-13)
+- **Fixed:**
+  - Recording into an attached instrument lane: the lane's own instrument clips no longer push the take to another row (`record.rs`).
+  - Full-frame repaints on every playback tick: `win_clamp::keep_all` compares rounded positions.
+  - The colour change was one step too many: plain `MCmd::Color` records through `set_track_color` only.
+  - Mixer-track rename step name; sidechain source names ("Bus N").
+  - "Insert multiple..." follows ML Studio's visibility switch.
+  - About page name; a help guide topic with one paragraph; "AI assistant settings" in the label-dispatched menu list; VST3 test tolerates `Sync`.
+  - Slot auto-bypass is recorded again (`fx.skipped` from `run_slot` in `mix_serial` and `mix_workers`).
+- **Full workspace: 3053 passed, 100 failed, 133 ignored. 15 failures are outside the old baseline, and none are caused by the merge:**
+  - **9 need ML Studio's signed native vocal engine installed** (`audio_edits::*`, `warp::legacy_tuned_warp_recovers_original_controls`, `zipped::audio_edits_portable_pending_revision_keeps_history_and_source`).
+  - **6 fail in ML Studio's own v2026.11.13.1 as well** (checked by building a clean copy of `origin/michael-lane`): `app::tests::audio_router_numbers_drag_both_directions`, `app::tests::global_snap`, `app::tests::playlist_colorful_waveforms`, `audio_cfg::tests::asio_buffer_is_always_driver_owned`, `browser_preview::tests::browser_preview_options_and_playlist_menu`, `channel_bounce::tests::rack_features_compact_controls_and_filtered_piano_layout`.
+- **How to check a test against pure ML Studio:**
+  1. `git worktree add --detach /Volumes/aquilabuild/mltree origin/michael-lane`
+  2. `rsync -a --delete --exclude .git --exclude target /Volumes/aquilabuild/mltree/ /Volumes/aquilabuild/tree/`. ML Plasma's CMake cache needs the `/Volumes/aquilabuild/tree` path.
+  3. Run cargo there with the same environment as `chk.sh`.
+  4. Remove the worktree afterwards. The next `chk.sh` run syncs AQUILA back.

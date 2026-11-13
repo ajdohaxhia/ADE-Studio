@@ -438,6 +438,7 @@ Restore default visibility brings back the default show/hide choices. Existing t
 ### Move the Settings window
 settings options menu move drag position title header floating
 Drag the Settings window by its title bar to move it within the workspace. File, Options and other dropdown menus stay anchored to their menu buttons; they cannot be dragged.
+The window keeps its new place while AQUILA runs. Close and reopen Settings to bring it back to its usual position if it ends up out of view.
 
 ### Customize menus
 menu layout arrange submenu hide items piano roll channel rack mixer

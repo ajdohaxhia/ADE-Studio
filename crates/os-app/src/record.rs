@@ -692,8 +692,17 @@ impl App {
         }
         let at = ti / bar * bar;
         let len = crate::piano::pattern_length(s, pattern).max(bar);
-        let lane = crate::smart_recording::instrument_lane(s).filter(|(_,p)|*p==pattern).map_or(0, |(t,_)|t);
-        let track = crate::playlist::free_track(s, lane, at, at + len);
+        let lane = crate::smart_recording::instrument_lane(s).filter(|(_,p)|*p==pattern).map(|(t,_)|t);
+        // The lane's own instrument clips (an attached instrument's projection, ML Studio) do not occupy it; anything
+        // else overlapping sends the take to a free row.
+        let own = lane.and_then(|l| s.project.instrument_lanes.iter().find(|v| v.2 == l).map(|v| v.0))
+            .or_else(|| lane.and(s.project.channels.get(s.selected_channel).map(|c| c.index)));
+        let blocked = |l: u16| crate::playlist::clips(s).iter().any(|c| c.track == l && c.position < at + len && c.end() > at
+            && !matches!((c.source, own), (ClipSource::Channel(ch), Some(o)) if ch == o));
+        let track = match lane {
+            Some(l) if !blocked(l) => l,
+            _ => crate::playlist::free_track(s, lane.unwrap_or(0), at, at + len),
+        };
         let clip = os_model::Clip::new(at, len, track, ClipSource::Pattern(pattern));
         crate::playlist::arr_mut(s).clips.push(clip);
         if let Some(k) = s.rec.take.as_mut() {
