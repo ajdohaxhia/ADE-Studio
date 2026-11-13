@@ -490,6 +490,12 @@ impl App {
                                 loose = true;
                             }
                         }
+                        // A value mirrored from playback or the host: the next edit's starting value, never a step.
+                        os_host::ParamEvent::Sync(id, v) => {
+                            if v.is_finite() && !l.open.contains_key(&id) {
+                                l.values.insert(id, v);
+                            }
+                        }
                         os_host::ParamEvent::End(id) => {
                             if let Some(from) = l.open.remove(&id) {
                                 let now = l.values.get(&id).copied().unwrap_or(from);

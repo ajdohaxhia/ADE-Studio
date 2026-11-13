@@ -478,7 +478,7 @@ fn the_mixer_s_edits_are_undoable() {
     ui_round_trip(&mut a, "Insert mixer track", |a| {
         run(a, MCmd::InsertOne(2));
     });
-    ui_round_trip(&mut a, "Mixer track name", |a| {
+    ui_round_trip(&mut a, "Rename mixer track", |a| {
         crate::playlist::start_edit(&mut a.state, crate::playlist::EditTarget::MixerName(1), (0.0, 0.0));
         a.state.playlist.edit.as_mut().unwrap().text = "Drums".into();
         crate::playlist::commit_edit(&mut a.state);

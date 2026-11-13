@@ -109,7 +109,7 @@ impl Row {
 fn kinds_of(target: Target) -> (bool, bool) {
     match target {
         Target::All | Target::Container(crate::container::CHANNEL) => (true, true),
-        Target::Gen(_) | Target::Replace(_) | Target::Stack(_) | Target::MemberInst(..) | Target::Track(_) => (true, false),
+        Target::AttachedInstrument | Target::PlaylistInstrument(_) | Target::LaneInstrument(..) | Target::Gen(_) | Target::Replace(_) | Target::Stack(_) | Target::MemberInst(..) | Target::Track(_) => (true, false),
         Target::Fx(_) | Target::ClipFx(..) | Target::Container(_) | Target::Member(..) => (false, true),
     }
 }

@@ -55,7 +55,9 @@ fn run() -> Result<(), String> {
     let mut library = SampleLibrary::new(factory);
     let started = std::time::Instant::now();
     let mut engine = Engine::new(&project, &mut library, rate, mode);
-    engine.set_threads((threads > 0).then(|| os_engine::parallel::Pool::new(threads, None)));
+    // ML Studio's workers: on with a thread count, limited to it.
+    engine.set_multicore(threads > 0);
+    engine.set_worker_limit(threads.max(1));
     // A song renders from its start marker and jumps at skips, as the app's export (spec: audio/song-structure.md
     // "Time markers").
     engine.follow_markers();

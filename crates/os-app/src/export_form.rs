@@ -19,6 +19,7 @@ pub const TITLE: &str = "Export audio";
 /// The form's title for the mixer track menu's File ▸ Render to wave file....
 pub const TRACKS_TITLE: &str = "Render to wave file";
 pub const MAIN: &str = "Export";
+pub(crate) const ADVANCED_VISIBILITY: &str = "visible_export-advanced";
 
 /// The segmented rows: their labels and segments.
 pub const SEGS: [(&str, &[&str]); 3] = [("Play", &["Song", "Pattern"]), ("Range", &["Whole", "Selection"]), ("Tail", &ex::TAILS)];
@@ -91,6 +92,8 @@ pub struct ExportForm {
     pub pat_secs: f64,
     pub secs_per_tick: f64,
     pub o: Options,
+    pub advanced: bool,
+    other_options: Options,
     /// The device's rate (the render's).
     pub device_rate: u32,
     /// The combo whose list is open.
@@ -106,7 +109,7 @@ pub struct ExportForm {
 impl ExportForm {
     /// The span chosen, when Range is Selection and there is one.
     pub fn span(&self) -> Option<(u32, u32)> {
-        if !self.selection {
+        if !self.selection || (!self.advanced && !self.to_clip) {
             return None;
         }
         if self.song { self.song_sel } else { self.pat_sel }
@@ -282,9 +285,11 @@ impl App {
             return self.tell(Kind::Warning, TITLE, spans(&[&text]));
         }
         let song = if song { song_ok } else { !pat_ok };
-        let mut o = Options::load();
+        let mut o = Options { wav_depth: 1, mp3_kbps: 320, ..Options::default() };
+        let mut other_options = Options::load();
         if mp3 {
             o.formats = [false, false, true, false];
+            other_options.formats = o.formats;
         }
         let name = s.path.as_ref().and_then(|p| p.file_stem()).map_or_else(|| "Untitled".to_string(), |n| n.to_string_lossy().into_owned());
         let folder = match crate::settings_file::get("export_folder").map(PathBuf::from).filter(|d| d.is_dir()) {
@@ -315,6 +320,8 @@ impl App {
             pat_secs: f64::from(pat_len) * secs_per_tick,
             secs_per_tick,
             o,
+            advanced: false,
+            other_options,
             device_rate,
             list: None,
             to_clip: false,
@@ -334,22 +341,28 @@ impl App {
             self.invalidate();
             return None;
         }
+        let advanced_controls = f.advanced || f.to_clip;
         match h {
-            FHit::Seg(0, i) if (if i == 0 { f.song_ok } else { f.pat_ok }) => {
+            FHit::ExportAdvanced(advanced) if advanced != f.advanced && !f.to_clip
+                && crate::workspace_visibility::shown(ADVANCED_VISIBILITY) => {
+                std::mem::swap(&mut f.o, &mut f.other_options);
+                f.advanced = advanced;
+            }
+            FHit::Seg(0, i) if advanced_controls && (if i == 0 { f.song_ok } else { f.pat_ok }) => {
                 f.song = i == 0;
                 f.selection &= f.has_selection();
             }
-            FHit::Seg(1, i) => f.selection = i == 1 && f.has_selection(),
-            FHit::Seg(_, i) => f.o.tail = [Tail::Cut, Tail::Ring, Tail::Wrap][usize::from(i).min(2)],
+            FHit::Seg(1, i) if advanced_controls => f.selection = i == 1 && f.has_selection(),
+            FHit::Seg(2, i) if advanced_controls => f.o.tail = [Tail::Cut, Tail::Ring, Tail::Wrap][usize::from(i).min(2)],
             // A format toggles; the last one ticked stays.
-            FHit::Tile(t) => {
+            FHit::Tile(t) if advanced_controls || [ex::WAV, ex::MP3].contains(&usize::from(t)) => {
                 let t = usize::from(t).min(3);
                 if !f.o.formats[t] || f.o.ticked().count() > 1 {
                     f.o.formats[t] = !f.o.formats[t];
                 }
             }
-            FHit::Check(k) if f.check(k).1 => f.toggle(k),
-            FHit::Combo(k) if ExportForm::combo_format(k).is_none_or(|t| f.o.formats[t]) => f.list = Some(k),
+            FHit::Check(k) if (advanced_controls || k == 10) && f.check(k).1 => f.toggle(k),
+            FHit::Combo(k) if advanced_controls && ExportForm::combo_format(k).is_none_or(|t| f.o.formats[t]) => f.list = Some(k),
             FHit::Folder => self.export_folder_pick(),
             FHit::Main => return self.export_form_accept(),
             _ => {}
@@ -419,7 +432,7 @@ impl App {
             let job = self.export_job(&f);
             return self.start_export(job, f.song);
         }
-        f.o.save();
+        if f.advanced { f.o.save(); }
         crate::settings_file::write("export_folder", &f.folder.to_string_lossy());
         let job = self.export_job(&f);
         self.start_export(job, f.song);
@@ -568,6 +581,7 @@ mod tests {
         empty.act(crate::app::Action::MenuItem(0, FILE_EXPORT));
         let f = form(&empty).expect("the Export form");
         assert!(f.song && f.song_ok && !f.pat_ok, "Play starts on Song");
+        click(&mut empty, FHit::ExportAdvanced(true));
         click(&mut empty, FHit::Seg(0, 1));
         assert!(form(&empty).unwrap().song, "Pattern has nothing to render");
 
@@ -580,6 +594,7 @@ mod tests {
         assert!(form(&app).is_none(), "Esc cancels");
 
         app.act(crate::app::Action::MenuItem(0, FILE_EXPORT));
+        click(&mut app, FHit::ExportAdvanced(true));
         click(&mut app, FHit::Tile(ex::FLAC as u8));
         click(&mut app, FHit::Main);
         // The render started (and keeps going in the background); the next form remembers FLAC.
@@ -588,7 +603,16 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         app.act(crate::app::Action::MenuItem(0, FILE_EXPORT));
+        let easy = form(&app).unwrap();
+        assert!(!easy.advanced);
+        assert_eq!(easy.o.formats, [true, false, false, false]);
+        assert_eq!((easy.o.wav_depth, easy.o.mp3_kbps), (1, 320));
+        click(&mut app, FHit::Tile(ex::MP3 as u8));
+        assert_eq!(form(&app).unwrap().o.formats, [true, false, true, false]);
+        click(&mut app, FHit::ExportAdvanced(true));
         assert_eq!(form(&app).unwrap().o.formats, [true, true, false, false], "WAV (the default) and FLAC");
+        click(&mut app, FHit::ExportAdvanced(false));
+        assert_eq!(form(&app).unwrap().o.formats, [true, false, true, false]);
         app.dialog_key(&Key::Named(NamedKey::Escape), false, false);
         for e in ["wav", "flac"] {
             let _ = std::fs::remove_file(form_folder().join(format!("Untitled.{e}")));
@@ -607,6 +631,7 @@ mod tests {
         app.state.piano.range = Some((0, 96));
         crate::playlist::arr_mut(&mut app.state).clips.push(os_model::Clip::new(0, 96, 0, os_model::ClipSource::Pattern(1)));
         app.act(crate::app::Action::MenuItem(0, FILE_EXPORT_MP3));
+        click(&mut app, FHit::ExportAdvanced(true));
         click(&mut app, FHit::Seg(1, 1));
         assert_eq!(form(&app).unwrap().span(), Some((0, 96)), "the piano roll's selection");
         click(&mut app, FHit::Seg(0, 0));

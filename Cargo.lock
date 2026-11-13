@@ -839,8 +839,6 @@ dependencies = [
 [[package]]
 name = "cpal"
 version = "0.18.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f02e8d0327b42d3e2e4ab2119af397344eb9fc54a34bf0ddeaa1277af8681f1"
 dependencies = [
  "alsa",
  "block2 0.6.2",
@@ -3512,6 +3510,7 @@ dependencies = [
  "bindgen 0.72.1",
  "libloading 0.8.9",
  "os-engine",
+ "os-flp",
  "os-host",
  "os-model",
  "serde",

@@ -364,3 +364,48 @@ Full list with messages: `/Volumes/aquilabuild/work/base-msgs.txt`. About 13 are
   - Piano roll Delete tool: works. In AQUILA, D duplicates notes by default (ML Studio's "D duplicates notes" option), and Ctrl+A keeps a manual time range. The test was adapted.
 - **Full workspace now:** 2986 passed, 85 failed (all pre-merge), 120 ignored. Remaining list: `/Volumes/aquilabuild/work/last.log`; triage notes earlier in this section.
 - **Reminder:** the build image lives at `/Volumes/SanDisk EXTREME SSD/aquila-build/aquilabuild.sparseimage`. Mount it with `hdiutil attach <that path>` (mounts at `/Volumes/aquilabuild`) and detach it before unplugging the SSD.
+
+---
+
+## 11. ML Studio v2026.11.12.1 and v2026.11.13.1 merged (2026-11-13)
+
+**Owner's decision:** AQUILA now uses **ML Studio's audio engine** for instrument and mixer scheduling, not Lemon Studio's `multicore.rs`.
+
+### What changed
+- **Merged `origin/michael-lane` (`b7b0748a`)**: about 205 files, including ML Studio's vendored `cpal`, attached mixer / instrument tracks, the audio editor (`audio_edits`), the voice assistant, export advanced mode, latency presets, device extra outputs, worker limit and priority, smart disable, and its new parameter host events (`ParamEvent::Sync`).
+- **Engine:** ML Studio's `instrument_workers`, `mix_workers` and `mixer_graph`, with its `render_instruments`, `mix_serial` and `mix_graph`. **`multicore.rs` was deleted**, along with `mix_track`, `instrument_job`, `route_out`, `LoadGate` and `Engine::set_threads`.
+- **Kept from Lemon Studio** (ML Studio never touched these files):
+  - the vocoder, filter, flanger and phaser effects; peak and formula controllers; formula; chain
+  - the `auto_bypass` module and `rec.rs`
+  - `run_slot`'s slot auto-bypass: ML Studio's callers now store its result in `fx.skipped`, and both callers pass the tick and the switch
+  - pattern control points in `param_auto` (on ML Studio's `HashMap`)
+  - the `inst_later` scheduled notes and the MPE MIDI channel on live notes (added back into ML Studio's `render_instruments`)
+- **No longer active, by design** (their tests are retired with `#[ignore]` reasons):
+  - Lemon Studio's per-track input monitoring, direct outputs and disk recording in the engine (AQUILA already used ML Studio's transport for these)
+  - channel-level auto-bypass for hosted instruments
+  - unfaded hosted instruments during pause
+  - per-frame automated level ramps for hosted instruments
+- **Devices:** ML Studio's `Source` trait, `Mix` and extra device channels. Lemon Studio's variable-width multi-output (`set_width`, `play(out, width)`) is gone. `transport::raise_priority` now forwards to ML Studio's `set_feeder_priority(2)`. Linux real-time priority for the callback is kept.
+- **`params.rs` deliberately kept as AQUILA's (Lemon Studio's parameter lists and gesture undo).** It now handles `ParamEvent::Sync` as a host baseline update. **Not yet ported:** ML Studio's non-blocking batched parameter polling (`poll_index`, `param_values_job`, `POLL_BATCH`), which avoids audio stalls with large VST3 banks, plus its two tests. That's a worthwhile follow-up.
+- **Prefs:** ML Studio's `SMART_DISABLE` (key `smart_disable_v1`, plugins sleep when idle) and AQUILA's renamed `AUTO_BYPASS` (key `smart_disable`, "Auto-bypass when silent") are separate. Both appear on Audio ▸ CPU, next to ML Studio's threaded generator/mixer switches, worker limit and priority.
+- **Model:** `PlaylistTrack` has both ML Studio's `attached_mixer` and Lemon Studio's `TrackLink` (similar purpose; consider unifying later).
+- **Packaging:** `github-release.json` and the NSIS version are 2026.11.13.1. The release JSON's download URLs still point at ML Studio's server (michaellanemusic.de), as they did before; they need AQUILA's own release URLs before publishing.
+
+### Not verified
+- **Windows-only code** (`device/asio.rs`, `plugin_window/win32.rs`) was resolved to ML Studio's side but **cannot be compiled on this Mac**. Build on Windows before a Windows release.
+
+### Test status after the merge
+**3058 passed, 103 failed, 133 ignored.** 21 failures are outside the old pre-merge baseline:
+- **9 need ML Studio's signed native vocal engine on the machine** (the tests deliberately fail without it): `audio_edits::tests::*` (7), `warp::tests::legacy_tuned_warp_recovers_original_controls`, `zipped::tests::audio_edits_portable_pending_revision_keeps_history_and_source`. Not a merge regression; install the vocal engine to check them.
+- **12 to look at next:**
+  - `app::tests::audio_router_numbers_drag_both_directions` (no "Browser preview track" number on the page)
+  - `app::tests::global_snap` (toolbar layout)
+  - `app::tests::hotfix_scrolled_settings_keep_about_clickable`
+  - `app::tests::playback_repaint_matches_full`, `app::tests::tempo_tapper_flash_repaints_the_pad` (repaint regions)
+  - `app::tests::playlist_colorful_waveforms`
+  - `attached_mixer::tests::attached_existing_instrument_records_midi_in_its_projected_lane`: ML Studio's attached-mixer recording against AQUILA's recording path. **Likely the most important.**
+  - `audio_cfg::tests::asio_buffer_is_always_driver_owned`
+  - `browser_preview::tests::browser_preview_options_and_playlist_menu`
+  - `channel_bounce::tests::rack_features_compact_controls_and_filtered_piano_layout`
+  - `help::tests::guide_menu_search_read_back_and_visibility` (a guide topic lacks category, keywords or paragraphs)
+  - `mixer::tests::mixer_batch_insert_validates_and_restores_routing_and_selection` (AQUILA's track menu always shows "Insert multiple...")

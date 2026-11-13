@@ -57,11 +57,13 @@ pub const MIXER_TRACK_IO: &str = "Mixer track audio input / output";
 /// What a step changes, as it is on the other side of the step.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Snap {
+    AttachedInstrument { generator:Box<Snap>, playlist:Box<crate::playlist::Snapshot>, mixer:Option<Box<crate::mixer::ChannelCopy>>, n:u16, selected:u16 },
     ChannelEnabled(usize,bool),
     /// Permutation to apply, with a channel snapshot only when protecting a shared edit.
     RackOrder(Vec<usize>, Option<Vec<os_model::Channel>>),
     PitchFollow(usize,bool,i32),
     AudioWarps(Vec<os_model::AudioWarp>),
+    AudioEdits(Vec<os_model::audio_edit::Document>),
     Vocals(Vec<os_model::vocal::Edit>),
     StackLinks(usize,Vec<u16>),
     ClipFxOwners(Vec<u16>),
@@ -86,6 +88,7 @@ pub enum Snap {
     /// Mixer track `.0`'s volume fader (0..1, the fader law; `None`: the track's default).
     Fader(u16, Option<f64>),
     TrackColor(u16,Option<os_model::Rgb>),
+    TrackName(u16, Option<String>),
     SourceColor(os_model::ClipSource, Option<os_model::Rgb>, Option<os_model::Rgb>),
     CutGroups(u16,u32,u32),
     Effects(u16, bool, bool),
@@ -94,6 +97,7 @@ pub enum Snap {
     StripBypass(u16,bool),
     DriveType(u16,u16),
     EqPosition(u16,bool),
+    HardwareOutput(u16, Option<os_model::HardwareOutput>),
     EqEnabled(u16, bool),
     MixerLock(u16, bool),
     MixerGroupLock(u16, bool),
@@ -189,6 +193,7 @@ impl Rows {
         let (p, r) = (&s.project, &s.rack);
         Rows {
             vocal_edits:p.vocal_edits.clone(),
+            audio_edits:p.audio_edits.clone(),
             mpe_channels:p.mpe.channels.clone(),
             clip_fx_channels:p.clip_fx_channels.clone(),
             clip_picker_order: p.clip_picker_order.clone(),
@@ -228,6 +233,7 @@ impl Rows {
         let m = |r: usize| map.get(r).copied().flatten();
         let p = &mut s.project;
         p.vocal_edits=self.vocal_edits;
+        p.audio_edits=self.audio_edits;
         p.mpe.channels=self.mpe_channels;
         p.clip_fx_channels=self.clip_fx_channels;
         p.clip_picker_order = self.clip_picker_order;
@@ -335,7 +341,7 @@ impl Snap {
     /// What this covers, as the project has it now.
     fn now(&self, s: &State) -> Snap {
         match self {
-
+            Snap::AttachedInstrument{generator,mixer,n,..}=>Snap::AttachedInstrument{generator:Box::new(generator.now(s)),playlist:Box::new(crate::playlist::capture(s)),mixer:if mixer.is_none(){crate::mixer::channel_copy(s,*n).map(Box::new)}else{None},n:*n,selected:s.selected_mixer},
             Snap::ClipFxTargets(..)=>Snap::ClipFxTargets(s.project.automations.clone(),s.project.init_controls.clone(),s.project.peak_links.clone()),
             Snap::MpeConfig(_)=>Snap::MpeConfig(s.project.mpe.channels.clone()),
             Snap::ClipFxOwners(_)=>Snap::ClipFxOwners(s.project.clip_fx_channels.clone()),
@@ -344,6 +350,7 @@ impl Snap {
                 let current=s.project.channels.get(r.row).and_then(|_|s.params.lists.get(&r.row)).and_then(|l|l.plugin.upgrade()).and_then(|p|p.lock().ok()?.save_state()).unwrap_or_else(||blob.clone());
                 Snap::StackInstrument(Box::new(RackSide::now(s,r.row)),*index,current)
             },
+            Snap::AudioEdits(_)=>Snap::AudioEdits(s.project.audio_edits.clone()),
             Snap::Vocals(_)=>Snap::Vocals(s.project.vocal_edits.clone()),
             Snap::AudioWarps(_)=>Snap::AudioWarps(s.project.audio_warps.clone()),
             Snap::Tempo(_) => Snap::Tempo(s.tempo),
@@ -360,6 +367,7 @@ impl Snap {
             // A track or an instance gone since is left as the step has it (`put` does nothing then).
             Snap::CutGroups(id,_,_) => s.project.channel(*id).map_or_else(||self.clone(),|c| Snap::CutGroups(*id,c.misc.cut,c.misc.cut_by)),
             Snap::TrackColor(t,_) => Snap::TrackColor(*t,crate::mixer::track(s,*t).and_then(|m|m.color)),
+            Snap::TrackName(t, _) => Snap::TrackName(*t, crate::mixer::track(s, *t).and_then(|m| m.name.clone())),
             Snap::Fader(t, _) => crate::mixer::track(s, *t).map_or_else(|| self.clone(), |m| Snap::Fader(*t, m.volume)),
             Snap::RackStrips(v) => Snap::RackStrips(v.iter().filter_map(|c|crate::mixer::channel_copy(s,c.track.index)).collect()),
             Snap::MixerChannel(c) => crate::mixer::channel_copy(s,c.track.index).map(|c|Snap::MixerChannel(Box::new(c))).unwrap_or_else(||self.clone()),
@@ -370,6 +378,7 @@ impl Snap {
             Snap::MixerLock(t, _) => Snap::MixerLock(*t, crate::mixer::individually_locked(s, *t)),
             Snap::MixerGroupLock(t, _) => Snap::MixerGroupLock(*t, crate::mixer::group_locked(s, *t)),
             Snap::EqEnabled(t, _) => crate::mixer::track(s, *t).map_or_else(|| self.clone(), |m| Snap::EqEnabled(*t, m.slot_on[usize::from(crate::mini_eq::SLOT)])),
+            Snap::HardwareOutput(t, _) => Snap::HardwareOutput(*t, crate::mixer::track(s, *t).and_then(|m| m.hardware_output.clone())),
             Snap::EqPosition(t,_) => crate::mixer::track(s,*t).map_or_else(||self.clone(),|m|Snap::EqPosition(*t,m.parametric_pre)),
             Snap::DriveType(t,_) => crate::mixer::track(s,*t).map_or_else(||self.clone(),|m|Snap::DriveType(*t,m.strip[6])),
             Snap::StripBypass(t,_) => crate::mixer::track(s,*t).map_or_else(||self.clone(),|m|Snap::StripBypass(*t,m.strip_bypassed)),
@@ -416,7 +425,7 @@ impl Snap {
     /// Whether this holds the playlist (`forget_playlist`).
     fn has_playlist(&self) -> bool {
         match self {
-            Snap::Playlist(_) => true,
+            Snap::Playlist(_) | Snap::AttachedInstrument{..} => true,
             Snap::Several(v) => v.iter().any(Snap::has_playlist),
             _ => false,
         }
@@ -429,6 +438,12 @@ impl Snap {
                 notes.iter_mut().for_each(|n| n.rescale(from, to));
                 controls.iter_mut().for_each(|c| c.rescale(from, to));
                 *length = length.map(|l| os_model::rescale_length(l, from, to));
+            }
+            Snap::AttachedInstrument{generator,playlist,..}=>{
+                generator.rescale(from,to);
+                playlist.0.iter_mut().for_each(|c|c.rescale(from,to));
+                playlist.1.iter_mut().for_each(|m|m.rescale(from,to));
+                for clips in playlist.2.iter_mut().filter_map(|t|t.frozen.as_mut()){clips.iter_mut().for_each(|c|c.rescale(from,to));}
             }
             Snap::Playlist(p) => {
                 p.0.iter_mut().for_each(|c| c.rescale(from, to));
@@ -455,6 +470,7 @@ impl Snap {
             | Snap::StackLinks(..)
             | Snap::StackInstrument(..)
             | Snap::Vocals(..)
+            | Snap::AudioEdits(..)
             | Snap::AudioWarps(..)
             | Snap::Tempo(..)
             | Snap::MixerInsert{..}
@@ -465,6 +481,7 @@ impl Snap {
             | Snap::ChannelRoute(..)
             | Snap::CutGroups(..)
             | Snap::TrackColor(..)
+            | Snap::TrackName(..)
             | Snap::SourceColor(..)
             | Snap::Fader(..)
             | Snap::Ara(..)
@@ -477,6 +494,7 @@ impl Snap {
             | Snap::TuneEnabled(..)
             | Snap::PeakLinks(..)
             | Snap::EqPosition(..)
+            | Snap::HardwareOutput(..)
             | Snap::EqEnabled(..)
             | Snap::MixerLock(..)
             | Snap::MixerGroupLock(..)
@@ -538,6 +556,15 @@ impl Snap {
                 }
             }
             Snap::Replace(r) => put_replaced(s, *r),
+            Snap::AttachedInstrument{generator,playlist,mixer,n,selected}=>{
+                if let Some(m)=mixer{
+                    crate::mixer::insert_tracks(s,Some(n),1);
+                    generator.put(s);crate::playlist::restore(s,*playlist);crate::mixer::put_channel(s,*m);
+                }else{
+                    generator.put(s);crate::mixer::undo_insert(s,n,1);crate::playlist::restore(s,*playlist);
+                }
+                s.selected_mixer=selected;s.mixer.sel.clear();crate::attached_mixer::clear(s);
+            }
             Snap::ClipFxTargets(a,i,p)=>{s.project.automations=a;s.project.init_controls=i;crate::peak_link::restore_removed(s,&p);s.project.peak_links=p;},
             Snap::MpeConfig(v)=>s.project.mpe.channels=v,
             Snap::ClipFxOwners(v)=>s.project.clip_fx_channels=v,
@@ -547,6 +574,7 @@ impl Snap {
                 put_rack(s,*r);
                 if back{s.rows_moved.push(((0..s.project.channels.len()).map(Some).collect(),vec![(row,index,blob)]));}
             },
+            Snap::AudioEdits(v)=>s.project.audio_edits=v,
             Snap::Vocals(v)=>s.project.vocal_edits=v,
             Snap::AudioWarps(v)=>s.project.audio_warps=v,
             Snap::Tempo(v) => s.tempo=v,
@@ -565,6 +593,7 @@ impl Snap {
             Snap::Knob(id, v) => set_knob_value(s, id, v),
             Snap::CutGroups(id,cut,by) => if let Some(c)=s.project.channels.iter_mut().find(|c|c.index==id) {c.misc.cut=cut;c.misc.cut_by=by;},
             Snap::TrackColor(t,col) => {if let Some(m)=crate::mixer::track_mut(s,t){m.color=col;}},
+            Snap::TrackName(t, name) => { if let Some(track) = crate::mixer::track_mut(s, t) { track.name = name; } },
             Snap::SourceColor(source, color, stored) => match source {
                 os_model::ClipSource::Pattern(n) => crate::patterns::pat_mut(s, n).color = color,
                 os_model::ClipSource::Channel(id) => {
@@ -612,6 +641,9 @@ impl Snap {
             Snap::EqEnabled(t, enabled) => {
                 if let Some(m) = crate::mixer::track_mut(s, t) { m.slot_on[usize::from(crate::mini_eq::SLOT)] = enabled; }
             },
+            Snap::HardwareOutput(t, output) => {
+                if let Some(track) = crate::mixer::track_mut(s, t) { track.hardware_output = output; }
+            }
             Snap::EqPosition(t,p) => {if let Some(m)=crate::mixer::track_mut(s,t){m.parametric_pre=p;}},
             Snap::DriveType(t,p) => {if let Some(m)=s.project.mixer.iter_mut().find(|m|m.index==t){m.strip[6]=p;}},
             Snap::StripBypass(t,b) => {if let Some(m)=s.project.mixer.iter_mut().find(|m|m.index==t){m.strip_bypassed=b;}},
@@ -821,11 +853,14 @@ impl History {
         previous
     }
     pub(crate) fn end_sequence(&mut self, previous: Self) {
+        self.end_sequence_named(previous,"Custom action sequence");
+    }
+    pub(crate) fn end_sequence_named(&mut self, previous: Self,name: &'static str) {
         let sequence = std::mem::replace(self, previous);
         let snaps: Vec<_> = sequence.steps.into_iter().take(sequence.done).map(|step|step.snap).collect();
         if snaps.is_empty() { return; }
         self.steps.truncate(self.done);
-        self.steps.push(Step { name: "Custom action sequence".into(), snap: Snap::Several(snaps), expected:None });
+        self.steps.push(Step { name: name.into(), snap: Snap::Several(snaps), expected:None });
         self.done = self.steps.len();
         self.undid = false;
         self.wheel = None;
@@ -846,6 +881,11 @@ impl History {
     /// The run ends: the next change is a step of its own.
     pub fn end_run(&mut self) {
         self.run = None;
+    }
+
+    pub(crate) fn wrap_attached_instrument(&mut self,playlist:crate::playlist::Snapshot,n:u16,selected:u16){
+        let snaps=self.steps.drain(..).map(|s|s.snap).collect();
+        self.steps.push(Step{name:"Insert instrument track".into(),snap:Snap::AttachedInstrument{generator:Box::new(Snap::Several(snaps)),playlist:Box::new(playlist),mixer:None,n,selected},expected:None});self.done=1;
     }
 
     /// How many steps there are ("Last reset" not counted).
@@ -2300,6 +2340,7 @@ pub struct Settings {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Rows {
     pub vocal_edits:Vec<os_model::vocal::Edit>,
+    pub audio_edits:Vec<os_model::audio_edit::Document>,
     pub mpe_channels:Vec<(u16,os_model::mpe::Config)>,
     pub clip_fx_channels:Vec<u16>,
     pub clip_picker_order: Vec<os_model::ClipSource>,

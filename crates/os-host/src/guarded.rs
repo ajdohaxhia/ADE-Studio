@@ -31,12 +31,18 @@ pub struct Guarded<P: Plugin> {
     meter: Arc<Meter>,
     /// The instance's attention count, raised here too when it crashes (the UI then reports the stop).
     attention: Option<Arc<Attention>>,
+    sleep: crate::smart_disable::SmartDisable,
+    offline: bool,
+    sleep_attention: u64,
+    levels: Option<ChannelLevels>,
+    voicing: Option<ChannelVoicing>,
 }
 
 /// Shares `plugin`, code of `module`, as a guarded instance (format crates' `Library::create`).
 pub fn share<P: Plugin + 'static>(plugin: P, module: Arc<Module>) -> SharedPlugin {
     let attention = plugin.attention();
-    Arc::new(Mutex::new(Guarded { inner: ManuallyDrop::new(plugin), module, state: RefCell::new(None), meter: Arc::default(), attention }))
+    let sleep_attention = attention.as_ref().map_or(0, |a| a.count());
+    Arc::new(Mutex::new(Guarded { inner: ManuallyDrop::new(plugin), module, state: RefCell::new(None), meter: Arc::default(), attention, sleep_attention, sleep: Default::default(), offline: false, levels: None, voicing: None }))
 }
 
 impl<P: Plugin> Guarded<P> {
@@ -48,6 +54,16 @@ impl<P: Plugin> Guarded<P> {
                 a.raise();
             }
             stopped
+        })
+    }
+
+    fn sleep_tail(&mut self) -> Option<u64> {
+        if !self.sleep.enabled() || self.offline { return None; }
+        let attention = self.attention.as_ref().map_or(0, |a| a.count());
+        if attention != self.sleep_attention { self.sleep.wake(); self.sleep_attention = attention; }
+        self.look(None, |p| {
+            if p.active() || p.voices() > 0 || p.extra_outputs() > 0 { return None; }
+            p.smart_disable_tail().map(|tail| tail.saturating_add(u64::from(p.latency())))
         })
     }
 
@@ -69,20 +85,26 @@ impl<P: Plugin> Drop for Guarded<P> {
 }
 
 impl<P: Plugin> Instrument for Guarded<P> {
+    fn set_smart_disable(&mut self, enabled: bool) { self.sleep.set_enabled(enabled); }
     fn parallel_processing(&self) -> bool { self.look(false, |p| p.parallel_processing()) }
     fn note_on(&mut self, offset: u32, key: u8, velocity: f32) {
+        self.sleep.wake();
         self.run((), |p| p.note_on(offset, key, velocity))
     }
     fn note_off(&mut self, offset: u32, key: u8) {
+        self.sleep.wake();
         self.run((), |p| p.note_off(offset, key))
     }
     fn note_on_from(&mut self, offset: u32, key: u8, velocity: f32, start: f32) {
+        self.sleep.wake();
         self.run((), |p| p.note_on_from(offset, key, velocity, start))
     }
     fn note_start(&mut self, offset: u32, key: u8, velocity: f32, start: f32, levels: os_engine::NoteLevels) {
+        self.sleep.wake();
         self.run((), |p| p.note_start(offset, key, velocity, start, levels))
     }
     fn choke(&mut self, offset: u32, key: u8) {
+        self.sleep.wake();
         self.run((), |p| p.choke(offset, key))
     }
     fn voice_start(
@@ -95,6 +117,7 @@ impl<P: Plugin> Instrument for Guarded<P> {
         levels: os_engine::NoteLevels,
         voice: u32,
     ) {
+        self.sleep.wake();
         self.run((), |p| p.voice_start(offset, key, velocity, start, end, levels, voice))
     }
     fn voice_gains(&self) -> bool {
@@ -104,26 +127,36 @@ impl<P: Plugin> Instrument for Guarded<P> {
         self.look(false, |p| p.voice_ends())
     }
     fn voice_gain(&mut self, offset: u32, voice: u32, gain: f32) {
+        self.sleep.wake();
         self.run((), |p| p.voice_gain(offset, voice, gain))
     }
     fn voice_choke(&mut self, offset: u32, key: u8, voice: u32) {
+        self.sleep.wake();
         self.run((), |p| p.voice_choke(offset, key, voice))
     }
     fn tune(&mut self, offset: u32, key: u8, semitones: f32) {
+        self.sleep.wake();
         self.run((), |p| p.tune(offset, key, semitones))
     }
     fn takes_tuning(&self) -> bool {
         self.look(false, |p| p.takes_tuning())
     }
     fn set_bend_range(&mut self, semitones: u32) {
+        self.sleep.wake();
         self.run((), |p| p.set_bend_range(semitones))
     }
     fn process(&mut self, rate: u32, left: &mut [f32], right: &mut [f32]) {
+        let tail = self.sleep_tail();
+        if self.sleep.skip(rate, left.len(), true, tail) {
+            self.run((), |p| p.advance_silent(rate, left.len()));
+            left.fill(0.); right.fill(0.); self.meter.set_voices(0); return;
+        }
         let t0 = Instant::now();
         let voices = self.run(None, |p| {
             p.process(rate, left, right);
             Some(p.voices())
         });
+        if self.sleep.enabled() { self.sleep.rendered(left.len(), crate::smart_disable::silent(left, right)); }
         self.meter.add(t0.elapsed());
         match voices {
             Some(n) => self.meter.set_voices(n),
@@ -148,26 +181,32 @@ impl<P: Plugin> Instrument for Guarded<P> {
         self.look(0, |p| p.voices())
     }
     fn reset(&mut self) {
+        self.sleep.reset();
         self.run((), |p| p.reset());
         let n = self.look(0, |p| p.voices());
         self.meter.set_voices(n);
     }
     fn param(&mut self, offset: u32, index: u32, value: f64) {
+        self.sleep.wake();
         self.run((), |p| p.param(offset, index, value))
     }
     fn tick_params(&self) -> bool {
         self.look(false, |p| p.tick_params())
     }
     fn transport(&mut self, info: &TransportInfo) {
+        self.sleep.transport(info);
         self.run((), |p| p.transport(info))
     }
     fn midi(&mut self, offset: u32, bytes: [u8; 3]) {
+        self.sleep.midi(bytes);
         self.run((), |p| p.midi(offset, bytes))
     }
     fn channel_levels(&mut self, levels: ChannelLevels) -> bool {
+        if self.levels != Some(levels) { self.sleep.wake(); self.levels = Some(levels); }
         self.run(false, |p| p.channel_levels(levels))
     }
     fn channel_voicing(&mut self, voicing: &ChannelVoicing) {
+        if self.voicing.as_ref() != Some(voicing) { self.sleep.wake(); self.voicing = Some(*voicing); }
         self.run((), |p| p.channel_voicing(voicing))
     }
     fn reported_delay(&self) -> u32 {
@@ -176,27 +215,45 @@ impl<P: Plugin> Instrument for Guarded<P> {
 }
 
 impl<P: Plugin> HostedEffect for Guarded<P> {
+    fn set_smart_disable_fx(&mut self, enabled: bool) { self.sleep.set_enabled(enabled); }
     fn process_fx(&mut self, rate: u32, left: &mut [f32], right: &mut [f32]) {
         // A crash midway leaves the block as far as the plugin got; later blocks pass through untouched.
+        let input_quiet = self.sleep.enabled() && crate::smart_disable::silent(left, right);
+        let tail = self.sleep_tail();
+        if self.sleep.skip(rate, left.len(), input_quiet, tail) {
+            self.run((), |p| p.advance_silent(rate, left.len()));
+            return;
+        }
         let t0 = Instant::now();
         self.run((), |p| p.process_fx(rate, left, right));
+        self.sleep.rendered(left.len(), input_quiet && crate::smart_disable::silent(left, right));
         self.meter.add(t0.elapsed());
     }
     fn process_fx_keyed(&mut self, rate: u32, left: &mut [f32], right: &mut [f32], key: (&[f32], &[f32])) {
+        let input_quiet = self.sleep.enabled() && crate::smart_disable::silent(left, right) && crate::smart_disable::silent(key.0, key.1);
+        let tail = self.sleep_tail();
+        if self.sleep.skip(rate, left.len(), input_quiet, tail) {
+            self.run((), |p| p.advance_silent(rate, left.len()));
+            return;
+        }
         let t0 = Instant::now();
         self.run((), |p| p.process_fx_keyed(rate, left, right, key));
+        self.sleep.rendered(left.len(), input_quiet && crate::smart_disable::silent(left, right));
         self.meter.add(t0.elapsed());
     }
     fn reset_fx(&mut self) {
+        self.sleep.reset();
         self.run((), |p| p.reset_fx())
     }
     fn param_fx(&mut self, offset: u32, index: u32, value: f64) {
+        self.sleep.wake();
         self.run((), |p| p.param_fx(offset, index, value))
     }
     fn tick_params_fx(&self) -> bool {
         self.look(false, |p| p.tick_params_fx())
     }
     fn transport_fx(&mut self, info: &TransportInfo) {
+        self.sleep.transport(info);
         self.run((), |p| p.transport_fx(info))
     }
     fn reported_delay_fx(&self) -> u32 {
@@ -217,10 +274,43 @@ impl<P: Plugin> Plugin for Guarded<P> {
         self.look(None, |p| p.help_url())
     }
     fn activate(&mut self, rate: u32) -> bool {
+        self.sleep.wake();
         self.run(false, |p| p.activate(rate))
     }
     fn idle(&mut self) {
         self.run((), |p| p.idle())
+    }
+    fn take_ui_job(&mut self) -> Option<crate::UiJob> {
+        let job = self.run(None, |p| p.take_ui_job())?;
+        let module = self.module.clone();
+        let attention = self.attention.clone();
+        Some(Box::new(move || {
+            if guard::call(&module, job).is_err() {
+                if let Some(attention) = attention { attention.raise(); }
+            }
+        }))
+    }
+    fn param_values_job(&self) -> Option<crate::ParamValuesJob> {
+        let job = self.look(None, |p| p.param_values_job())?;
+        let module = self.module.clone();
+        let attention = self.attention.clone();
+        Some(Box::new(move || {
+            guard::call(&module, job).unwrap_or_else(|_| {
+                if let Some(attention) = attention { attention.raise(); }
+                Vec::new()
+            })
+        }))
+    }
+    fn param_values_job_range(&self, range: std::ops::Range<usize>) -> Option<crate::ParamValuesJob> {
+        let job = self.look(None, |p| p.param_values_job_range(range))?;
+        let module = self.module.clone();
+        let attention = self.attention.clone();
+        Some(Box::new(move || {
+            guard::call(&module, job).unwrap_or_else(|_| {
+                if let Some(attention) = attention { attention.raise(); }
+                Vec::new()
+            })
+        }))
     }
     fn has_editor(&self) -> bool {
         self.look(false, |p| p.has_editor())
@@ -229,6 +319,7 @@ impl<P: Plugin> Plugin for Guarded<P> {
         self.look(false, |p| p.editor_open())
     }
     fn editor_job(&mut self, action: crate::EditorAction) -> Option<crate::EditorJob> {
+        self.sleep.wake();
         let job = self.run(None, |p| p.editor_job(action))?;
         let module = self.module.clone();
         let attention = self.attention.clone();
@@ -242,6 +333,7 @@ impl<P: Plugin> Plugin for Guarded<P> {
         }))
     }
     fn open_editor(&mut self, parent: *mut c_void, scale: f32) -> Result<(u32, u32), String> {
+        self.sleep.wake();
         let stopped = Err(format!("{} has stopped", self.inner.desc().name));
         let r = self.run(stopped, |p| p.open_editor(parent, scale));
         // The editor's windows go under the guard at once.
@@ -258,6 +350,7 @@ impl<P: Plugin> Plugin for Guarded<P> {
         self.run(None, |p| p.resize_editor(width, height))
     }
     fn close_editor(&mut self) {
+        self.sleep.wake();
         self.run((), |p| p.close_editor())
     }
     fn save_state(&self) -> Option<Vec<u8>> {
@@ -270,6 +363,7 @@ impl<P: Plugin> Plugin for Guarded<P> {
         saved
     }
     fn load_state(&mut self, data: &[u8]) -> bool {
+        self.sleep.wake();
         let ok = self.run(false, |p| p.load_state(data));
         if ok {
             *self.state.borrow_mut() = Some(data.to_vec());
@@ -298,13 +392,16 @@ impl<P: Plugin> Plugin for Guarded<P> {
         self.run((), |p| p.use_param_aliases(aliases))
     }
     fn set_offline(&mut self, offline: bool) {
+        self.offline = offline;
+        self.sleep.wake();
         self.run((), |p| p.set_offline(offline))
     }
     fn param_count(&self) -> usize {
         self.look(0, |p| p.param_count())
     }
     fn programs(&self)->Vec<(u32,u32,String)> {self.look(Vec::new(),|p|p.programs())}
-    fn select_program(&mut self,id:u32,index:u32)->bool {self.run(false,|p|p.select_program(id,index))}
+    fn select_program(&mut self,id:u32,index:u32)->bool {
+        self.sleep.wake();self.run(false,|p|p.select_program(id,index))}
     fn param_info(&self, index: usize) -> Option<ParamInfo> {
         self.look(None, |p| p.param_info(index))
     }
@@ -315,12 +412,15 @@ impl<P: Plugin> Plugin for Guarded<P> {
         self.look(None, |p| p.param_text(id, value))
     }
     fn set_param(&mut self, id: u32, value: f64) -> bool {
+        self.sleep.wake();
         self.run(false, |p| p.set_param(id, value))
     }
-    fn take_state_changed(&mut self) -> bool { self.run(false, |p|p.take_state_changed()) }
+    fn take_state_changed(&mut self) -> bool { let changed = self.run(false, |p|p.take_state_changed()); if changed { self.sleep.wake(); } changed }
     fn take_playback_requests(&mut self)->Vec<crate::PlaybackRequest> {self.run(Vec::new(),|p|p.take_playback_requests())}
     fn take_param_events(&mut self) -> Vec<ParamEvent> {
-        self.run(Vec::new(), |p| p.take_param_events())
+        let events = self.run(Vec::new(), |p| p.take_param_events());
+        if !events.is_empty() { self.sleep.wake(); }
+        events
     }
     fn take_automation_requests(&mut self) -> Vec<u32> {
         self.run(Vec::new(), |p| p.take_automation_requests())
@@ -338,6 +438,7 @@ impl<P: Plugin> Plugin for Guarded<P> {
         self.run(None, |p| p.take_menu())
     }
     fn menu_done(&mut self, id: u64, pick: Option<usize>) {
+        self.sleep.wake();
         self.run((), |p| p.menu_done(id, pick))
     }
     /// Its module's crash, else a stop the instance reports itself (a native plugin stops one instance when it raises
@@ -399,6 +500,18 @@ mod tests {
     }
 
     impl Plugin for Crashy {
+        fn param_values_job_range(&self, _: std::ops::Range<usize>) -> Option<crate::ParamValuesJob> {
+            self.param_values_job()
+        }
+        fn param_values_job(&self) -> Option<crate::ParamValuesJob> {
+            let crash = self.crash.clone();
+            Some(Box::new(move || {
+                if crash.load(Ordering::Relaxed) {
+                    unsafe { std::ptr::read_volatile(8 as *const usize) };
+                }
+                vec![(7, 0.5)]
+            }))
+        }
         fn desc(&self) -> &Descriptor {
             &self.desc
         }
@@ -457,6 +570,22 @@ mod tests {
         assert_eq!(p.lock().unwrap().stopped(), None);
         drop(p);
         assert!(dropped.load(Ordering::Relaxed));
+    }
+
+    #[cfg(plugin_guard)]
+    #[test]
+    fn controller_snapshot_is_guarded_after_releasing_instance_lock() {
+        let (p, crash, _) = crashy();
+        let job = p.lock().unwrap().param_values_job().unwrap();
+        assert_eq!(job(), vec![(7, 0.5)]);
+        let attention = p.lock().unwrap().attention().unwrap();
+        let before = attention.count();
+        let job = p.lock().unwrap().param_values_job_range(0..1).unwrap();
+        crash.store(true, Ordering::Relaxed);
+        assert!(job().is_empty());
+        assert_eq!(p.lock().unwrap().stopped(), Some(0xC000_0005));
+        assert!(attention.count() > before);
+        assert!(p.lock().unwrap().param_values_job().is_none());
     }
 
     /// A crash stops the instance: effects pass the sound through, instruments are silent, the last saved state is kept,

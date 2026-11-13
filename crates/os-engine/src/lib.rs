@@ -34,7 +34,7 @@ pub mod vu;
 pub mod wav;
 
 pub use clock::Clock;
-pub use engine::{input_channels, live_edits, scheduled_notes, DeviceInput, Engine, EngineReport, LiveEdit, LoadGate, PlayMode, RecordPoint, RecordTap};
+pub use engine::{input_channels, live_edits, scheduled_notes, DeviceInput, Engine, EngineReport, LiveEdit, PlayMode, RecordPoint, RecordTap};
 pub use instrument::{ChannelLevels, ChannelVoicing, HostedEffect, Instrument, NoteLevels, SharedEffect, SharedInstrument, TransportInfo, TuningBend};
 pub use sample::{Sample, SampleLibrary};
 
